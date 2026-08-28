@@ -87,8 +87,8 @@
   <h1>小院时光</h1>
   <p>A LITTLE COURTYARD · 3D DIORAMA</p>
 </div>
-<div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩</div>
-<div id="clock"><span id="clockTime">北京 --:--</span><span class="temp" id="clockTemp"></span></div>
+<div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩 / 小猫 / 小兔</div>
+<div id="clock"><span id="clockTime">北京 --:--</span><span class="temp" id="clockWx"></span><span class="temp" id="clockTemp"></span></div>
 <div id="panel">
   <select id="citySelect" aria-label="城市"></select>
   <button id="btnDay">🌙 夜晚</button>
@@ -406,6 +406,7 @@ function miniIsland(x, y, z, w, d, deco) {
 // 白云（高空飘过）
 const clouds = [];
 const cloudMat = new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: GRAD });
+const CAM_AZ = Math.atan2(19, 21);   // 初始相机 (19, 17, 21) 的方位角
 for (let i = 0; i < 6; i++) {
   const g = new THREE.Group();
   const n = 3 + Math.floor(Math.random() * 3);
@@ -416,8 +417,9 @@ for (let i = 0; i < 6; i++) {
     m.scale.y = 0.6;
     g.add(m);
   }
-  const a = Math.random() * Math.PI * 2, r = 20 + Math.random() * 16;
-  g.position.set(Math.cos(a) * r, 13 + Math.random() * 5, Math.sin(a) * r);
+  // 云环避开初始相机方位角，防止开屏时云团糊在镜头上
+  const a = CAM_AZ + 1.0 + Math.random() * (Math.PI * 2 - 2.0), r = 19 + Math.random() * 6;
+  g.position.set(Math.cos(a) * r, 15 + Math.random() * 4, Math.sin(a) * r);
   g.scale.setScalar(0.8 + Math.random() * 0.5);
   g.scale.y *= 0.72;
   g.userData.speed = 0.25 + Math.random() * 0.3;
@@ -439,8 +441,9 @@ for (let i = 0; i < 5; i++) {
     m.scale.y = 0.55;
     g.add(m);
   }
-  const a = Math.random() * Math.PI * 2, r = 14 + Math.random() * 14;
-  g.position.set(Math.cos(a) * r, 9 + Math.random() * 4, Math.sin(a) * r);
+  // 暴雨云低低悬在院子正上方（半径收进院子内圈），永远不会跑到相机附近
+  const a = CAM_AZ + 1.0 + Math.random() * (Math.PI * 2 - 2.0), r = 8.5 + Math.random() * 6;
+  g.position.set(Math.cos(a) * r, 7.5 + Math.random() * 2.5, Math.sin(a) * r);
   g.scale.setScalar(1.05 + Math.random() * 0.45);
   g.scale.y *= 0.7;
   g.userData.speed = 0.18 + Math.random() * 0.22;
@@ -1276,6 +1279,7 @@ const catHead = new THREE.Group();
   cat.userData.tail.add(seg2);
   cat.add(cat.userData.tail);
 }
+let catExcitedUntil = 0;   // 被点中后开心蹦跳一会儿
 
 /* ============================================================
    晾衣绳 + 串灯（夜晚亮起）
@@ -1431,6 +1435,29 @@ head.add(hat);
 const girlMeshes = [];
 girl.traverse(o => { if (o.isMesh) girlMeshes.push(o); });
 let excitedUntil = 0;
+
+/* ---------- 小红伞（下雨天自动撑开） ---------- */
+// 挂在右手上：平时藏在身后scale≈0不可见，雨天右臂举起、伞面"砰"地撑开
+const umbrella = new THREE.Group();
+{
+  const pole = mesh(cyl(0.011, 0.011, 0.62, 8), mat(0x8a5a3c), 0, -0.57, 0);
+  umbrella.add(pole);
+  umbrella.add(mesh(cyl(0.007, 0.007, 0.08, 8), mat(0xd94f4f), 0, -0.71, 0));   // 伞顶尖
+  const canopy = mesh(new THREE.ConeGeometry(0.38, 0.2, 14), mat(0xe05a4e, { side: THREE.DoubleSide }), 0, -0.84, 0);
+  umbrella.add(canopy);
+  for (let i = 0; i < 14; i++) {   // 伞边缘的白色扇形描边
+    const a = (i / 14) * Math.PI * 2;
+    const rib = mesh(sph(0.016, 8), mat(0xfff6ea), Math.cos(a) * 0.372, -0.9, Math.sin(a) * 0.372);
+    rib.scale.set(1, 0.45, 1);
+    umbrella.add(rib);
+  }
+  umbrella.add(mesh(sph(0.02, 8), woodDark, 0, -0.885, 0));   // 伞柄弯头
+}
+umbrella.position.set(0, -0.28, 0);   // 手心位置
+umbrella.scale.setScalar(0.001);
+umbrella.visible = false;
+armR.add(umbrella);
+let umbrellaOpen = 0;
 
 /* ---------- 随机散步状态机 ---------- */
 // 障碍物（圆）：房子 / 池塘 / 大树 / 秋千 / 樱花树 / 长椅 / 野餐布 / 小猫 / 向日葵 / 菜地
@@ -1663,7 +1690,7 @@ bunny.position.set(-8.6, 0, 7.4);
 bunny.rotation.y = 0.6;
 scene.add(bunny);
 
-const bunnyState = { mode: 'rest', tx: 0, tz: 0, idleUntil: 2.0 };
+const bunnyState = { mode: 'rest', tx: 0, tz: 0, idleUntil: 2.0, until: 0 };
 const BUNNY_BOX = { minX: -9.6, maxX: -0.7, minZ: 3.2, maxZ: 8.6 };
 const BUNNY_AVOID = [
   [-4.6, 3.4, 1.5], [-3.5, 4.7, 0.75],
@@ -1718,6 +1745,24 @@ for (let mi = 0; mi < 2; mi++) {
   meteors.push({ head: mhead, trail: mtrail, active: false, nextAt: 5 + mi * 8, pos: new THREE.Vector3(), vel: new THREE.Vector3(), hist: [], endAt: 0 });
 }
 
+/* ---------- 雨后彩虹（雨停后短暂出现，夜里不亮） ---------- */
+const rainbow = new THREE.Group();
+{
+  const RAINBOW_COLS = [0xe6543e, 0xf08c1e, 0xf2d54d, 0x7cc45f, 0x5fa8dc, 0x6a6ec8, 0x9a5fc4];
+  for (let i = 0; i < RAINBOW_COLS.length; i++) {
+    const arc = new THREE.Mesh(
+      new THREE.TorusGeometry(17 - i * 0.62, 0.3, 8, 72, Math.PI),
+      new THREE.MeshBasicMaterial({ color: RAINBOW_COLS[i], transparent: true, opacity: 0, depthWrite: false, fog: false })
+    );
+    rainbow.add(arc);
+  }
+  rainbow.position.set(-2, 0.2, -25);
+  rainbow.rotation.y = 0.12;
+  rainbow.visible = false;
+  scene.add(rainbow);
+}
+let rainbowUntil = -1, rainbowFade = 0;
+
 /* ============================================================
    城市选择 / 当地时区小时 / 白天夜晚
 ============================================================ */
@@ -1766,7 +1811,6 @@ function cityHM(tz) {
   const s = t => p.find(x => x.type === t).value;
   return s('hour') + ':' + s('minute');
 }
-function beijingHourFrac() { return cityHourFrac(currentCity.tz); } // keep name so later animate() still works OR change animate to cityHourFrac(currentCity.tz)
 
 function envFromHour(h) {
   if (h >= 6 && h < 18) return 0;
@@ -1782,8 +1826,11 @@ function weatherKind(code) {
   if (c === 2 || c === 3) return 'cloudy';
   return 'clear';
 }
+const WX_NAMES = { clear: '晴', cloudy: '多云', rain: '雨', snow: '雪', fog: '雾' };
 
 let weather = { kind: 'clear', temp: null, cloud: 20, code: 0 };
+let prevWxKind = 'clear';          // 供「雨停出彩虹」检测天气转折
+let rainbowPending = false;        // 雨刚停，等动画循环里点亮彩虹
 let weatherMul = { sun: 1, cloudGray: 0, fog: 0, wet: 0 };
 const weatherGoal = { sun: 1, cloudGray: 0, fog: 0, wet: 0 };
 
@@ -1800,6 +1847,12 @@ function applyWeatherKind(kind, cloudCover) {
   snowPoints.visible = kind === 'snow';
   for (const g of stormClouds) g.visible = (kind === 'rain' || kind === 'cloudy' || kind === 'snow');
   void cc;
+  // 时钟栏天气文字
+  const wxEl = document.getElementById('clockWx');
+  if (wxEl) wxEl.textContent = ' ' + (WX_NAMES[kind] || '');
+  // 雨停了 → 待会儿出现彩虹（夜间则等天亮再说）
+  if (prevWxKind === 'rain' && kind !== 'rain') rainbowPending = true;
+  prevWxKind = kind;
 }
 
 async function fetchWeather(city) {
@@ -1865,10 +1918,25 @@ citySelect.addEventListener('change', () => {
   envTarget = envFromHour(cityHourFrac(currentCity.tz));
   syncDayButton();
   clockTemp.textContent = '';
-  fetchWeather(currentCity);
+  updateWeather();
 });
-fetchWeather(currentCity);
-setInterval(() => fetchWeather(currentCity), 10 * 60 * 1000);
+// 天气来源：URL 带 ?wx=clear|cloudy|rain|snow|fog 固定演示天气；
+// ?wx=cycle 每 18 秒轮播五种天气（雨停时正好能看到彩虹）；默认走真实天气 API
+const wxParam = (new URLSearchParams(location.search).get('wx') || '').trim();
+const WX_CYCLE = ['clear', 'cloudy', 'rain', 'snow', 'fog'];
+let wxCycleIdx = 0;
+function updateWeather() {
+  if (wxParam === 'cycle') {
+    applyWeatherKind(WX_CYCLE[wxCycleIdx % WX_CYCLE.length]);
+    wxCycleIdx++;
+  } else if (WX_NAMES[wxParam]) {
+    applyWeatherKind(wxParam);
+  } else {
+    fetchWeather(currentCity);
+  }
+}
+updateWeather();
+setInterval(updateWeather, wxParam === 'cycle' ? 18000 : 10 * 60 * 1000);
 function syncDayButton() {
   const wantNight = envTarget >= 0.5;
   const lbl = wantNight ? '☀️ 白天' : '🌙 夜晚';
@@ -1893,6 +1961,15 @@ renderer.domElement.addEventListener('pointerup', e => {
     excitedUntil = clock.elapsedTime + 2.4;
     walk.state = 'idle';                       // 打断散步，先挥手
     walk.idleUntil = excitedUntil + 0.6;       // 挥完手再继续走
+    return;
+  }
+  if (raycaster.intersectObject(cat, true).length) {
+    catExcitedUntil = clock.elapsedTime + 1.6; // 小猫开心蹦跳 + 尾巴快摇
+    return;
+  }
+  if (raycaster.intersectObject(bunny, true).length) {
+    bunnyState.mode = 'celebrate';             // 小兔子原地欢快蹦跳
+    bunnyState.until = clock.elapsedTime + 1.4;
   }
 });
 
@@ -1944,7 +2021,24 @@ function animate() {
   weatherMul.wet += (weatherGoal.wet - weatherMul.wet) * Math.min(1, delta * 0.6);
   sun.intensity *= weatherMul.sun;
 
+  // 雨后彩虹：雨刚停时先记着，天亮(或已白天)就浮现 22 秒再缓缓消隐
+  if (rainbowPending && env < 0.55) {
+    rainbowUntil = t + 22;
+    rainbowPending = false;
+  }
+  {
+    const want = t < rainbowUntil ? 1 : 0;
+    rainbowFade += (want - rainbowFade) * Math.min(1, delta * 0.5);
+    const rop = rainbowFade * 0.38 * (1 - env);
+    rainbow.visible = rop > 0.012;
+    if (rainbow.visible) {
+      for (const arc of rainbow.children) arc.material.opacity = rop;
+      rainbow.rotation.z = Math.sin(t * 0.11) * 0.02;   // 极轻微的摇曳
+    }
+  }
+
   /* --- 小女孩：随机散步 --- */
+  const holdUmb = umbrellaOpen > 0.05;   // 撑伞期间右臂姿态交给雨伞逻辑，状态机不再覆写
   const excited = t < excitedUntil;
   if (excited) {
     // 被点中：原地蹦跳 + 挥手
@@ -1953,8 +2047,9 @@ function animate() {
     head.rotation.z = Math.sin(t * 1.3) * 0.05;
     head.rotation.y = Math.sin(t * 6) * 0.1;
     armL.rotation.z = -0.28;
-    armR.rotation.z = 2.35 + Math.sin(t * 11) * 0.45;   // 右臂高举向外挥手
-    armL.rotation.x = armR.rotation.x = 0;
+    if (!holdUmb) armR.rotation.z = 2.35 + Math.sin(t * 11) * 0.45;   // 右臂高举向外挥手
+    armL.rotation.x = 0;
+    if (!holdUmb) armR.rotation.x = 0;
     legL.rotation.x = legR.rotation.x = 0;
     tails[0].rotation.z = 0.16 + Math.sin(t * 4) * 0.2;
     tails[1].rotation.z = -0.16 - Math.sin(t * 4 + 0.5) * 0.2;
@@ -1981,9 +2076,9 @@ function animate() {
       legL.rotation.x = sw * 0.55;
       legR.rotation.x = -sw * 0.55;
       armL.rotation.x = -sw * 0.35;
-      armR.rotation.x = sw * 0.35;
+      if (!holdUmb) armR.rotation.x = sw * 0.35;
       armL.rotation.z = -0.3;
-      armR.rotation.z = 0.3;
+      if (!holdUmb) armR.rotation.z = 0.3;
       girl.position.y = Math.abs(Math.sin(walk.phase)) * 0.035;
       girl.scale.y = 1.1;
       head.rotation.z = Math.sin(walk.phase * 0.5) * 0.04;
@@ -2002,8 +2097,9 @@ function animate() {
     head.rotation.y = Math.sin(t * 0.6) * 0.14;
     head.rotation.x = 0;
     armL.rotation.z = -0.28 - Math.sin(t * 2) * 0.07;
-    armR.rotation.z = 0.32 + Math.sin(t * 2 + 1) * 0.07;
-    armL.rotation.x = armR.rotation.x = 0;
+    if (!holdUmb) armR.rotation.z = 0.32 + Math.sin(t * 2 + 1) * 0.07;
+    armL.rotation.x = 0;
+    if (!holdUmb) armR.rotation.x = 0;
     legL.rotation.x = legR.rotation.x = 0;
     tails[0].rotation.z = 0.16 + Math.sin(t * 2.6) * 0.13;
     tails[1].rotation.z = -0.16 - Math.sin(t * 2.6 + 0.5) * 0.13;
@@ -2015,9 +2111,26 @@ function animate() {
     }
   }
 
+  // 雨天撑伞：右臂缓缓举到头顶，伞面随之撑开；雨停后收起
+  umbrellaOpen += ((weather.kind === 'rain' ? 1 : 0) - umbrellaOpen) * Math.min(1, delta * 3.2);
+  umbrella.visible = umbrellaOpen > 0.04;
+  umbrella.scale.setScalar(Math.max(0.001, umbrellaOpen));
+  if (umbrellaOpen > 0.05) {
+    const uk = Math.min(1, delta * 6) * umbrellaOpen;
+    armR.rotation.x += (-2.3 - armR.rotation.x) * uk;   // 举臂过头顶偏前（−x 旋转让手向 +z 上方抬）
+    armR.rotation.z += (0.15 - armR.rotation.z) * uk;
+  }
+
   /* --- 小猫 / 秋千 / 树 / 晾衣 / 涟漪 --- */
-  cat.userData.tail.rotation.y = Math.sin(t * 2.6) * 0.35;
-  catHead.rotation.y = Math.sin(t * 0.5) * 0.35;
+  if (t < catExcitedUntil) {
+    cat.position.y = Math.abs(Math.sin(t * 10)) * 0.14;    // 被点中：蹦跳 + 尾巴快摇
+    cat.userData.tail.rotation.y = Math.sin(t * 14) * 0.6;
+    catHead.rotation.y = Math.sin(t * 3) * 0.5;
+  } else {
+    cat.position.y = 0;
+    cat.userData.tail.rotation.y = Math.sin(t * 2.6) * 0.35;
+    catHead.rotation.y = Math.sin(t * 0.5) * 0.35;
+  }
   swingPivot.rotation.x = Math.sin(t * 0.85) * 0.22;
   for (const tr of trees) {
     tr.userData.foliage.rotation.z = Math.sin(t * 0.9 + tr.userData.phase) * 0.028;
@@ -2247,7 +2360,18 @@ function animate() {
   }
 
   // 小兔子蹦跶
-  if (bunnyState.mode === 'rest') {
+  if (bunnyState.mode === 'celebrate') {
+    const bounce = Math.abs(Math.sin(t * 10));   // 被点中：原地欢快蹦跳 + 耳朵竖起
+    bunny.position.y = bounce * 0.2;
+    bunnyBody.scale.y = 0.95 * (0.94 + bounce * 0.12);
+    bunny.userData.ears.forEach(e => { e.rotation.x = -0.55 * bounce; });
+    bunnyHead.rotation.y = Math.sin(t * 4) * 0.3;
+    if (t > bunnyState.until) {
+      bunnyState.mode = 'rest';
+      bunnyState.idleUntil = t + 2;
+      bunny.position.y = 0;
+    }
+  } else if (bunnyState.mode === 'rest') {
     bunny.position.y = 0;
     bunnyBody.scale.y = 0.95 * (1 + Math.sin(t * 3) * 0.02);   // 呼吸
     const twitch = Math.sin(t * 1.9) > 0.986 ? Math.sin(t * 55) * 0.3 : 0;   // 耳朵偶尔抖动
@@ -2323,6 +2447,21 @@ addEventListener('resize', () => {
 });
 
 document.getElementById('loading').classList.add('hide');
+
+// 调试探针：控制台可用 __yard() 查看内部状态；__yardStep(n) 手动推进 n 帧（页面在后台 rAF 暂停时用）
+const __scr = v => { const p = v.clone().project(camera); return [Math.round((p.x * 0.5 + 0.5) * innerWidth), Math.round((-p.y * 0.5 + 0.5) * innerHeight)]; };
+window.__yard = () => ({ env, envTarget, timeAuto, umbrellaOpen, wx: weather.kind, rainbowPending, rainbowFade, autoRotate: controls.autoRotate,
+  armX: +armR.rotation.x.toFixed(2), armZ: +armR.rotation.z.toFixed(2),
+  upos: umbrella.getWorldPosition(new THREE.Vector3()).toArray().map(v => +v.toFixed(2)),
+  gpos: girl.position.toArray().map(v => +v.toFixed(2)),
+  girlScr: __scr(girl.position.clone().setY(0.8)), catScr: __scr(cat.position.clone().setY(0.3)), bunnyScr: __scr(bunny.position.clone().setY(0.15)),
+  catY: +cat.position.y.toFixed(3), bunnyMode: bunnyState.mode, catExcited: clock.elapsedTime < catExcitedUntil });
+window.__pick = (x, y) => {
+  pointer.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  return { cat: raycaster.intersectObject(cat, true).length, bunny: raycaster.intersectObject(bunny, true).length, girl: raycaster.intersectObjects(girlMeshes, false).length };
+};
+window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
 animate();
 </script>
 </body>

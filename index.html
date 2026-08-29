@@ -895,11 +895,12 @@ for (let i = 0; i < 34; i++) {
 // 秋千
 const swingPivot = new THREE.Group();
 swingPivot.position.set(5.6, 3.3, -2.9);
+const swingSeat = new THREE.Group();   // 悬挂的坐垫部分（小女孩荡秋千时会坐上来）
 {
   const branch = mesh(cyl(0.1, 0.14, 2.2, 8), trunkMat, 5.6, 3.35, -2.8);
   branch.rotation.x = Math.PI / 2;
   diorama.add(branch);
-  const swing = new THREE.Group();
+  const swing = swingSeat;
   for (const side of [-1, 1]) {
     swing.add(mesh(cyl(0.025, 0.025, 2.1, 6), mat(0xe8d9b5), side * 0.55, -1.05, 0));
   }
@@ -1482,6 +1483,17 @@ function segHitsCircle(ax, az, bx, bz, cx, cz, r) {
 }
 function pickTarget() {
   const px = girl.position.x, pz = girl.position.z;
+  // 一半概率去固定活动点：池塘看鱼 / 坐长椅 / 荡秋千 / 回房休息
+  walk.spot = null;
+  if (Math.random() < 0.5) {
+    const spot = SPOTS[(Math.random() * SPOTS.length) | 0];
+    if (Math.hypot(spot.ax - px, spot.az - pz) > 1.2) {
+      let ok = true;
+      for (const [cx, cz, r] of OBSTACLES)
+        if (segHitsCircle(px, pz, spot.ax, spot.az, cx, cz, r)) { ok = false; break; }
+      if (ok) { walk.spot = spot; walk.target.set(spot.ax, spot.az); return; }
+    }
+  }
   for (let tries = 0; tries < 40; tries++) {
     const x = WALK_BOUNDS.minX + Math.random() * (WALK_BOUNDS.maxX - WALK_BOUNDS.minX);
     const z = WALK_BOUNDS.minZ + Math.random() * (WALK_BOUNDS.maxZ - WALK_BOUNDS.minZ);
@@ -1503,6 +1515,58 @@ function lerpAngle(a, b, k) {
   if (d > Math.PI) d -= Math.PI * 2;
   if (d < -Math.PI) d += Math.PI * 2;
   return a + d * k;
+}
+
+/* ---------- 小女孩的固定活动点：池塘边看鱼 / 坐长椅 / 荡秋千 / 回房休息 ---------- */
+const SPOTS = [
+  { kind: 'bench', ax: -5.8, az: 4.3 },      // 长椅前空地（长椅朝向 -0.7 的正前方偏右）
+  { kind: 'swing', ax: 6.65, az: -3.3 },     // 秋千支架旁
+  { kind: 'pond',  ax: 5.0,  az: 7.2 },      // 池塘南沿
+  { kind: 'house', ax: -8.06, az: -3.18 },   // 屋门口空地
+];
+const BENCH_SIT = { x: -4.6, y: 0.045, z: 3.4, rotY: -0.7 };        // 椅面上、朝椅背外
+const SWING_SIT = { x: -0.52, y: -2.561, z: 0 };                    // 秋千踏板局部坐标（小熊旁边）
+const DOOR_POS = { x: -7.35, z: -4.33 };                            // 屋门位置（世界坐标）
+const DOOR_APPROACH = new THREE.Vector3(-8.06, 0, -3.18);           // 门口外的落点
+
+// 到达活动点后进入对应状态
+function startActivity(spot, t) {
+  walk.fromPos = girl.position.clone();
+  walk.fromRotY = girl.rotation.y;
+  walk.approachPos = girl.position.clone();
+  walk.approachRotY = girl.rotation.y;
+  walk.blend = 0;
+  if (spot.kind === 'bench') {
+    walk.state = 'sit';
+    walk.toPos = new THREE.Vector3(BENCH_SIT.x, BENCH_SIT.y, BENCH_SIT.z);
+    walk.toRotY = BENCH_SIT.rotY;
+    walk.actUntil = t + 9 + Math.random() * 8;
+  } else if (spot.kind === 'swing') {
+    walk.state = 'toSwing';
+    walk.toPos = new THREE.Vector3(6.35, 0, -2.9);  // 秋千坐垫摆动路径旁站好
+    walk.toRotY = Math.atan2(5.08 - walk.fromPos.x, -2.9 - walk.fromPos.z);
+    walk.actUntil = t + 10 + Math.random() * 8;
+    walk.hopT = -1;                                  // -1 = 还在等秋千荡回来
+  } else if (spot.kind === 'pond') {
+    walk.state = 'watch';
+    walk.actUntil = t + 6 + Math.random() * 7;
+    walk.heading = Math.atan2(5 - walk.fromPos.x, 4 - walk.fromPos.z);   // 面向池塘
+  } else {   // house
+    walk.state = 'enter';
+    walk.toPos = new THREE.Vector3(DOOR_POS.x, 0, DOOR_POS.z);
+    walk.toRotY = Math.atan2(DOOR_POS.x - walk.fromPos.x, DOOR_POS.z - walk.fromPos.z);
+    walk.actUntil = t + 12 + Math.random() * 12;
+  }
+}
+// 被点击等情况下中断活动，恢复到可活动的地面状态
+function cancelActivity() {
+  if (girl.parent !== diorama) diorama.attach(girl);
+  girl.visible = true;
+  if (walk.state === 'swing' || walk.state === 'toSwing') girl.position.set(4.2, 0, -2.2);
+  else if (!girl.visible || walk.state === 'inside' || walk.state === 'enter' || walk.state === 'exit') girl.position.copy(DOOR_APPROACH);
+  girl.position.y = 0;
+  girl.rotation.x = 0; girl.rotation.z = 0;
+  legL.rotation.z = legR.rotation.z = 0;
 }
 
 /* ============================================================
@@ -1957,10 +2021,12 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
   pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  if (raycaster.intersectObjects(girlMeshes, false).length) {
+  if (girl.visible && raycaster.intersectObjects(girlMeshes, false).length) {
+    cancelActivity();                          // 坐着/荡着/在屋里都要先落地
     excitedUntil = clock.elapsedTime + 2.4;
     walk.state = 'idle';                       // 打断散步，先挥手
     walk.idleUntil = excitedUntil + 0.6;       // 挥完手再继续走
+    walk.spot = null;
     return;
   }
   if (raycaster.intersectObject(cat, true).length) {
@@ -2060,9 +2126,12 @@ function animate() {
     const dz = walk.target.y - girl.position.z;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.25) {
-      walk.state = 'idle';
-      walk.idleUntil = t + 1.5 + Math.random() * 3;
-      girl.position.y = 0;
+      if (walk.spot) { startActivity(walk.spot, t); }   // 到达活动点：坐下 / 上秋千 / 看鱼 / 进屋
+      else {
+        walk.state = 'idle';
+        walk.idleUntil = t + 1.5 + Math.random() * 3;
+        girl.position.y = 0;
+      }
     } else {
       const step = Math.min(WALK_SPEED * delta, dist);
       girl.position.x += (dx / dist) * step;
@@ -2088,6 +2157,148 @@ function animate() {
       tails[1].rotation.z = -0.16 - Math.sin(walk.phase + 0.5) * 0.18;
       tails[0].rotation.x = tails[1].rotation.x = Math.sin(walk.phase) * 0.15;
       dress.rotation.y = Math.sin(walk.phase * 0.5) * 0.04;
+    }
+  } else if (walk.state === 'sit' || walk.state === 'rise') {
+    // 长椅：坐下/起身（0→1 混合出落座的过渡，带一点扑坐的小弧线）
+    walk.blend = Math.min(1, walk.blend + delta * 1.8);
+    const b = walk.blend * walk.blend * (3 - 2 * walk.blend);
+    const k = walk.state === 'sit' ? b : 1 - b;
+    girl.position.lerpVectors(walk.fromPos, walk.toPos, b);
+    girl.position.y += Math.sin(b * Math.PI) * 0.22;
+    girl.rotation.y = lerpAngle(walk.fromRotY, walk.toRotY, b);
+    legL.rotation.x = legR.rotation.x = -1.4 * k;         // 腿向前伸
+    legL.rotation.z = 0.06 * k; legR.rotation.z = -0.06 * k;
+    armL.rotation.x = -0.55 * k;                          // 手搭在腿上
+    armL.rotation.z = -0.28;
+    if (!holdUmb) { armR.rotation.x = -0.55 * k; armR.rotation.z = 0.32; }
+    head.rotation.z = Math.sin(t * 1.3) * 0.04;
+    head.rotation.y = Math.sin(t * 0.5) * 0.18;
+    head.rotation.x = 0.03 * k;
+    tails[0].rotation.z = 0.16 + Math.sin(t * 1.8) * 0.1;
+    tails[1].rotation.z = -0.16 - Math.sin(t * 1.8 + 0.5) * 0.1;
+    tails[0].rotation.x = tails[1].rotation.x = 0;
+    if (walk.blend >= 1) {
+      if (walk.state === 'sit' && t > walk.actUntil) {
+        walk.state = 'rise';                              // 该起来了
+        [walk.fromPos, walk.toPos] = [walk.toPos.clone(), walk.approachPos.clone()];
+        [walk.fromRotY, walk.toRotY] = [walk.toRotY, walk.approachRotY];
+      } else if (walk.state === 'rise') {
+        walk.state = 'idle';
+        girl.position.y = 0;
+        legL.rotation.z = legR.rotation.z = 0;
+        walk.idleUntil = t + 0.8;
+        walk.spot = null;
+      }
+    }
+  } else if (walk.state === 'toSwing') {
+    // 走到秋千旁站好，等坐垫荡回最低点时起跳，和小熊并排坐
+    if (walk.hopT < 0) {
+      walk.blend = Math.min(1, walk.blend + delta * 1.6);
+      const b = walk.blend * walk.blend * (3 - 2 * walk.blend);
+      girl.position.lerpVectors(walk.fromPos, walk.toPos, b);
+      girl.rotation.y = lerpAngle(walk.fromRotY, walk.toRotY, b);
+      legL.rotation.x = legR.rotation.x = 0;
+      armL.rotation.x = 0;
+      if (!holdUmb) armR.rotation.x = 0;
+      if (walk.blend >= 1 && Math.abs(swingPivot.rotation.x) < 0.06) walk.hopT = 0;
+    } else {
+      walk.hopT = Math.min(1, walk.hopT + delta * 2.6);
+      const ht = walk.hopT;
+      const seatW = swingSeat.localToWorld(new THREE.Vector3(SWING_SIT.x, SWING_SIT.y, SWING_SIT.z));
+      girl.position.lerpVectors(walk.toPos, seatW, ht);
+      girl.position.y += Math.sin(ht * Math.PI) * 0.35;   // 抛物线小跳
+      girl.rotation.y = lerpAngle(walk.toRotY, 0, ht);
+      legL.rotation.x = legR.rotation.x = -0.5;           // 空中屈膝准备落座
+      if (ht >= 1) {
+        swingSeat.add(girl);
+        girl.position.set(SWING_SIT.x, SWING_SIT.y, SWING_SIT.z);
+        girl.rotation.set(0, 0, 0);
+        walk.state = 'swing';
+      }
+    }
+  } else if (walk.state === 'swing') {
+    // 荡秋千：腿前伸、双手抓绳，马尾随摆幅飘
+    const swA = swingPivot.rotation.x;
+    legL.rotation.x = legR.rotation.x = -1.35;
+    legL.rotation.z = 0.05; legR.rotation.z = -0.05;
+    armL.rotation.x = -2.2; armL.rotation.z = -0.45;
+    if (!holdUmb) { armR.rotation.x = -2.2; armR.rotation.z = 0.45; }
+    head.rotation.z = Math.sin(t * 1.3) * 0.04;
+    head.rotation.y = 0;
+    tails[0].rotation.x = tails[1].rotation.x = 0.3 + swA * 1.3;
+    tails[0].rotation.z = 0.16; tails[1].rotation.z = -0.16;
+    girl.position.y = SWING_SIT.y + Math.abs(Math.sin(t * 2.2)) * 0.008;
+    if (t > walk.actUntil && Math.abs(swingPivot.rotation.x) < 0.05) {
+      diorama.attach(girl);                               // 荡回低点时跳下来
+      walk.hopFrom = girl.position.clone();
+      walk.hopFromY = walk.hopFrom.y;
+      walk.toPos = new THREE.Vector3(6.35, 0, -2.9);
+      walk.hopT = 0;
+      girl.rotation.x = 0; girl.rotation.z = 0;
+      walk.state = 'hopOff';
+    }
+  } else if (walk.state === 'hopOff') {
+    // 从秋千跳落到草地的小弧线
+    walk.hopT = Math.min(1, walk.hopT + delta * 2.6);
+    const ht = walk.hopT;
+    girl.position.lerpVectors(walk.hopFrom, walk.toPos, ht);
+    girl.position.y = THREE.MathUtils.lerp(walk.hopFromY, 0, ht) + Math.sin(ht * Math.PI) * 0.3;
+    legL.rotation.x = legR.rotation.x = -0.4 * Math.sin(ht * Math.PI);
+    if (ht >= 1) {
+      girl.position.y = 0;
+      legL.rotation.x = legR.rotation.x = 0;
+      legL.rotation.z = legR.rotation.z = 0;
+      walk.state = 'idle';
+      walk.idleUntil = t + 1;
+      walk.spot = null;
+    }
+  } else if (walk.state === 'watch') {
+    // 池塘边看鱼：背着手看小鸭和锦鲤，偶尔歪头
+    girl.rotation.y = lerpAngle(girl.rotation.y, walk.heading, Math.min(1, delta * 5));
+    girl.position.y = Math.abs(Math.sin(t * 2)) * 0.012;
+    girl.scale.y = 1.1;
+    armL.rotation.x = 0.35; armL.rotation.z = -0.18;
+    if (!holdUmb) { armR.rotation.x = 0.35; armR.rotation.z = 0.18; }
+    head.rotation.z = Math.sin(t * 0.9) * 0.06;
+    head.rotation.y = Math.sin(t * 0.4) * 0.12;
+    head.rotation.x = 0.06;
+    tails[0].rotation.z = 0.16 + Math.sin(t * 1.6) * 0.08;
+    tails[1].rotation.z = -0.16 - Math.sin(t * 1.6 + 0.5) * 0.08;
+    tails[0].rotation.x = tails[1].rotation.x = 0;
+    if (t > walk.actUntil) {
+      walk.state = 'idle';
+      girl.position.y = 0;
+      walk.idleUntil = t + 1;
+      walk.spot = null;
+    }
+  } else if (walk.state === 'enter' || walk.state === 'exit') {
+    // 走进屋门 / 从屋里走出来
+    walk.blend = Math.min(1, walk.blend + delta * 1.3);
+    const b = walk.blend * walk.blend * (3 - 2 * walk.blend);
+    girl.position.lerpVectors(walk.fromPos, walk.toPos, b);
+    girl.rotation.y = lerpAngle(walk.fromRotY, walk.toRotY, b);
+    const step = Math.sin(t * 9) * 0.4;
+    legL.rotation.x = step; legR.rotation.x = -step;
+    armL.rotation.x = -step * 0.6;
+    if (!holdUmb) armR.rotation.x = step * 0.6;
+    if (walk.blend >= 1) {
+      if (walk.state === 'enter') {
+        girl.visible = false;                             // 进屋休息
+        walk.state = 'inside';
+      } else {
+        walk.state = 'idle';
+        walk.idleUntil = t + 1;
+        walk.spot = null;
+      }
+    }
+  } else if (walk.state === 'inside') {
+    // 在屋里休息（看不见），时间到了出门
+    if (t > walk.actUntil) {
+      girl.visible = true;
+      walk.state = 'exit';
+      [walk.fromPos, walk.toPos] = [walk.toPos.clone(), walk.approachPos.clone()];
+      walk.toRotY = Math.atan2(walk.approachPos.x - walk.fromPos.x, walk.approachPos.z - walk.fromPos.z);
+      walk.fromRotY = walk.toRotY + Math.PI;
     }
   } else {
     // 原地休息：呼吸、左顾右盼
@@ -2132,6 +2343,9 @@ function animate() {
     catHead.rotation.y = Math.sin(t * 0.5) * 0.35;
   }
   swingPivot.rotation.x = Math.sin(t * 0.85) * 0.22;
+  // 屋门：小女孩进出屋时缓缓敞开
+  const doorWant = (walk.state === 'enter' || walk.state === 'inside' || walk.state === 'exit') ? -1.15 : 0;
+  doorG.rotation.y += (doorWant - doorG.rotation.y) * Math.min(1, delta * 3.5);
   for (const tr of trees) {
     tr.userData.foliage.rotation.z = Math.sin(t * 0.9 + tr.userData.phase) * 0.028;
     tr.userData.foliage.rotation.x = Math.sin(t * 0.7 + tr.userData.phase * 2) * 0.02;
@@ -2451,16 +2665,28 @@ document.getElementById('loading').classList.add('hide');
 // 调试探针：控制台可用 __yard() 查看内部状态；__yardStep(n) 手动推进 n 帧（页面在后台 rAF 暂停时用）
 const __scr = v => { const p = v.clone().project(camera); return [Math.round((p.x * 0.5 + 0.5) * innerWidth), Math.round((-p.y * 0.5 + 0.5) * innerHeight)]; };
 window.__yard = () => ({ env, envTarget, timeAuto, umbrellaOpen, wx: weather.kind, rainbowPending, rainbowFade, autoRotate: controls.autoRotate,
+  state: walk.state, spot: walk.spot ? walk.spot.kind : null,
   armX: +armR.rotation.x.toFixed(2), armZ: +armR.rotation.z.toFixed(2),
   upos: umbrella.getWorldPosition(new THREE.Vector3()).toArray().map(v => +v.toFixed(2)),
   gpos: girl.position.toArray().map(v => +v.toFixed(2)),
   girlScr: __scr(girl.position.clone().setY(0.8)), catScr: __scr(cat.position.clone().setY(0.3)), bunnyScr: __scr(bunny.position.clone().setY(0.15)),
   catY: +cat.position.y.toFixed(3), bunnyMode: bunnyState.mode, catExcited: clock.elapsedTime < catExcitedUntil });
+window.__yardGoto = kind => {
+  const s = SPOTS.find(sp => sp.kind === kind);
+  if (!s) return false;
+  cancelActivity();
+  walk.spot = s;
+  walk.state = 'walk';
+  walk.target.set(s.ax, s.az);
+  return true;
+};
 window.__pick = (x, y) => {
   pointer.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
   return { cat: raycaster.intersectObject(cat, true).length, bunny: raycaster.intersectObject(bunny, true).length, girl: raycaster.intersectObjects(girlMeshes, false).length };
 };
+window.__yardHurry = () => { walk.actUntil = Math.min(walk.actUntil || Infinity, clock.elapsedTime + 0.3); };   // 调试：立刻结束当前活动
+window.__yardTeleport = (x, z) => { cancelActivity(); girl.position.set(x, 0, z); walk.state = 'idle'; walk.idleUntil = 1e9; };   // 调试：原地站定
 window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
 animate();
 </script>

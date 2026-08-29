@@ -25,6 +25,13 @@
     padding: 8px 14px; border-radius: 999px; user-select: none; pointer-events: none;
   }
 
+  #ihint {
+    position: fixed; top: 32px; left: 50%; transform: translateX(-50%); z-index: 10; color: #7a5a3a;
+    font-size: 12px; letter-spacing: 1px; white-space: nowrap;
+    background: rgba(255,255,255,.55); backdrop-filter: blur(8px);
+    padding: 8px 14px; border-radius: 999px; user-select: none; pointer-events: none;
+  }
+
   #panel {
     position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
     z-index: 10; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
@@ -87,12 +94,14 @@
   <h1>小院时光</h1>
   <p>A LITTLE COURTYARD · 3D DIORAMA</p>
 </div>
-<div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩 / 小猫 / 小兔</div>
+<div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩 / 小猫 / 小兔 · 点房子进屋</div>
+<div id="ihint" style="display:none">🏠 WASD / 方向键 走动 · 按住拖拽 环视 · ESC 或点「回到院子」离开</div>
 <div id="clock"><span id="clockTime">北京 --:--</span><span class="temp" id="clockWx"></span><span class="temp" id="clockTemp"></span></div>
 <div id="panel">
   <select id="citySelect" aria-label="城市"></select>
   <button id="btnDay">🌙 夜晚</button>
   <button id="btnRotate">🔄 自动旋转</button>
+  <button id="btnExit" style="display:none">🚪 回到院子</button>
 </div>
 <div id="loading"><div class="sun"></div><div>正在准备小院子…</div></div>
 
@@ -1550,13 +1559,202 @@ function startActivity(spot, t) {
 }
 // 被点击等情况下中断活动，恢复到可活动的地面状态
 function cancelActivity() {
-  if (girl.parent !== diorama) diorama.attach(girl);
+  if (girl.parent === roomGroup) return;   // 在屋里被打断：原地挥手，继续屋里活动
+  if (girl.parent !== diorama) diorama.add(girl);
   girl.visible = true;
   if (walk.state === 'swing' || walk.state === 'toSwing') girl.position.set(4.2, 0, -2.2);
-  else if (!girl.visible || walk.state === 'inside' || walk.state === 'enter' || walk.state === 'exit') girl.position.copy(DOOR_APPROACH);
+  else if (walk.state === 'inside' || walk.state === 'enter' || walk.state === 'exit') girl.position.copy(DOOR_APPROACH);
   girl.position.y = 0;
   girl.rotation.x = 0; girl.rotation.z = 0;
   legL.rotation.z = legR.rotation.z = 0;
+}
+
+/* ============================================================
+   房屋内部（点击房子进入：WASD/方向键 走动 · 按住拖拽 环视）
+============================================================ */
+const roomGroup = new THREE.Group();
+roomGroup.position.set(0, -60, 0);
+scene.add(roomGroup);
+const houseMeshes = [];
+house.traverse(o => { if (o.isMesh) houseMeshes.push(o); });
+let interiorMode = false;
+const interiorCam = { yaw: 0.62, pitch: -0.06, pos: new THREE.Vector3(), target: new THREE.Vector3() };
+const roomKeys = {};
+const UP_Y = new THREE.Vector3(0, 1, 0);
+const hint = document.getElementById('hint');
+const ihint = document.getElementById('ihint');
+const btnExit = document.getElementById('btnExit');
+// 家具占位（防穿墙/穿家具）：[x1, x2, z1, z2]
+const ROOM_SOLID = [
+  [-4.45, -2.55, -3.35, -0.85],   // 床
+  [1.05, 2.75, -3.15, -1.6],      // 书桌
+  [3.6, 4.5, 0.0, 1.15],          // 书架
+  [-4.25, -3.55, 2.25, 2.95],     // 落地灯
+];
+function resolveRoomClip(x, z, r) {
+  for (const [x1, x2, z1, z2] of ROOM_SOLID) {
+    if (x > x1 - r && x < x2 + r && z > z1 - r && z < z2 + r) {
+      const dx1 = x - (x1 - r), dx2 = (x2 + r) - x, dz1 = z - (z1 - r), dz2 = (z2 + r) - z;
+      const m = Math.min(dx1, dx2, dz1, dz2);
+      if (m === dx1) x = x1 - r; else if (m === dx2) x = x2 + r;
+      else if (m === dz1) z = z1 - r; else z = z2 + r;
+    }
+  }
+  return [Math.max(-4.1, Math.min(4.1, x)), Math.max(-2.9, Math.min(3.15, z))];
+}
+let roomExitDoor;
+{
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0xd9b384, roughness: 0.9 });
+  const wallMat = mat(0xf7ecd8);
+  const trimMat = mat(0xd8c6a8);
+  roomGroup.add(mesh(box(9.2, 0.26, 7.2), floorMat, 0, -0.13, 0));
+  roomGroup.add(mesh(box(9.2, 3.1, 0.18), wallMat, 0, 1.55, -3.51));   // 后墙
+  roomGroup.add(mesh(box(0.18, 3.1, 7.2), wallMat, -4.51, 1.55, 0));    // 左墙
+  roomGroup.add(mesh(box(0.18, 3.1, 7.2), wallMat, 4.51, 1.55, 0));     // 右墙
+  roomGroup.add(mesh(box(8.7, 0.14, 0.05), trimMat, 0, 0.07, -3.4));    // 踢脚线
+  // 窗户（复用外景玻璃材质：夜晚自动透出暖光）
+  roomGroup.add(mesh(box(1.8, 1.3, 0.08), glassMat, -1.4, 1.75, -3.44));
+  roomGroup.add(mesh(box(2.0, 0.1, 0.12), mat(0xf0deaa), -1.4, 2.44, -3.42));
+  roomGroup.add(mesh(box(2.0, 0.1, 0.12), mat(0xf0deaa), -1.4, 1.06, -3.42));
+  roomGroup.add(mesh(box(0.1, 1.48, 0.12), mat(0xf0deaa), -2.34, 1.75, -3.42));
+  roomGroup.add(mesh(box(0.1, 1.48, 0.12), mat(0xf0deaa), -0.46, 1.75, -3.42));
+  roomGroup.add(mesh(box(0.06, 1.3, 0.1), mat(0xf0deaa), -1.4, 1.75, -3.42));
+  // 小床
+  roomGroup.add(mesh(box(1.7, 0.34, 2.4), woodMat, -3.45, 0.17, -2.15));
+  roomGroup.add(mesh(box(1.7, 0.5, 0.12), woodDark, -3.45, 0.55, -3.28));
+  roomGroup.add(mesh(box(1.6, 0.18, 2.3), mat(0xe8f2f8), -3.45, 0.44, -2.15));
+  roomGroup.add(mesh(box(1.3, 0.14, 0.5), mat(0xffffff), -3.45, 0.58, -2.9));
+  roomGroup.add(mesh(box(1.62, 0.1, 1.3), mat(0xe8615a), -3.45, 0.56, -1.8));
+  // 圆地毯
+  const rug = mesh(new THREE.CircleGeometry(1.55, 30), mat(0xf2b8c6), 0.3, 0.016, 0.3);
+  rug.rotation.x = -Math.PI / 2; rug.castShadow = false;
+  roomGroup.add(rug);
+  // 书桌 + 椅子
+  roomGroup.add(mesh(cyl(0.72, 0.78, 0.08, 18), woodMat, 1.9, 0.76, -2.5));
+  roomGroup.add(mesh(cyl(0.08, 0.11, 0.72, 10), woodDark, 1.9, 0.36, -2.5));
+  roomGroup.add(mesh(box(0.52, 0.06, 0.52), woodMat, 1.9, 0.45, -1.3));
+  for (const [cx, cz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]])
+    roomGroup.add(mesh(cyl(0.03, 0.04, 0.42, 8), woodDark, 1.9 + cx, 0.21, -1.3 + cz));
+  roomGroup.add(mesh(box(0.52, 0.62, 0.06), woodMat, 1.9, 0.78, -1.02));
+  // 书架 + 彩色小书
+  roomGroup.add(mesh(box(0.34, 2.05, 1.1), woodMat, 4.28, 1.03, 0.5));
+  const bookCols = [0xe8615a, 0x5fa8dc, 0xf2c14e, 0x7cc45f, 0xc792ff];
+  for (let i = 0; i < 8; i++)
+    roomGroup.add(mesh(box(0.2, 0.32, 0.07), mat(bookCols[i % 5]), 4.14, 1.3 + (i % 2) * 0.58, 0.1 + (i >> 1) * 0.26));
+  // 落地灯（暖光点光源）
+  roomGroup.add(mesh(cyl(0.16, 0.2, 0.06, 12), woodDark, -3.9, 0.03, 2.6));
+  roomGroup.add(mesh(cyl(0.045, 0.045, 1.5, 8), woodDark, -3.9, 0.78, 2.6));
+  roomGroup.add(mesh(cyl(0.2, 0.34, 0.42, 12), mat(0xf2c66d, { side: THREE.DoubleSide }), -3.9, 1.68, 2.6));
+  const roomLamp = new THREE.PointLight(0xffd9a0, 14, 12, 1.7);
+  roomLamp.position.set(-3.9, 1.95, 2.6);
+  roomGroup.add(roomLamp);
+  const roomFill = new THREE.PointLight(0xfff2e0, 8, 15, 1.8);
+  roomFill.position.set(0.4, 2.7, 0.2);
+  roomGroup.add(roomFill);
+  // 墙上的小画
+  roomGroup.add(mesh(box(0.06, 0.72, 0.95), mat(0xd8b26a), -4.4, 1.85, -0.9));
+  roomGroup.add(mesh(box(0.02, 0.52, 0.75), mat(0xa8d8f0), -4.36, 1.85, -0.9));
+  // 出口的门（右墙，点击离开）
+  roomExitDoor = mesh(box(0.1, 1.9, 1.0), mat(0xa06a42), 4.43, 0.95, 2.45);
+  roomGroup.add(roomExitDoor);
+  roomGroup.add(mesh(sph(0.04, 8), mat(0xf0d896), 4.36, 0.95, 2.78));
+}
+function enterInterior() {
+  if (interiorMode) return;
+  interiorMode = true;
+  controls.enabled = false;
+  interiorCam.pos.copy(camera.position);
+  interiorCam.target.copy(controls.target);
+  camera.rotation.order = 'YXZ';
+  camera.position.set(2.75, roomGroup.position.y + 1.45, 2.95);
+  interiorCam.yaw = Math.atan2(2.75 - 0.2, 2.95 - (-0.6));
+  interiorCam.pitch = -0.06;
+  ihint.style.display = '';
+  btnExit.style.display = '';
+  hint.style.display = 'none';
+}
+function exitInterior() {
+  if (!interiorMode) return;
+  interiorMode = false;
+  controls.enabled = true;
+  camera.position.copy(interiorCam.pos);
+  controls.target.copy(interiorCam.target);
+  controls.update();
+  ihint.style.display = 'none';
+  btnExit.style.display = 'none';
+  hint.style.display = '';
+}
+btnExit.addEventListener('click', () => exitInterior());
+addEventListener('keydown', e => {
+  roomKeys[e.key.toLowerCase()] = true;
+  if (e.key === 'Escape' && interiorMode) exitInterior();
+});
+addEventListener('keyup', e => { roomKeys[e.key.toLowerCase()] = false; });
+
+/* ---------- 小女孩在屋里的随机小动作 ---------- */
+const iGirl = { state: 'walk', tx: 0.3, tz: 0.2, act: null, until: 0, blend: 0, phase: 0,
+  fromPos: new THREE.Vector3(), fromRotY: 0, seatPos: new THREE.Vector3(), seatRotY: 0 };
+const ROOM_SPOTS = [
+  { x: -1.4, z: -2.5, act: 'window', px: -1.4, py: 0, pz: -2.55, ry: Math.PI },          // 窗前看外面
+  { x: 1.9, z: -1.05, act: 'chair', px: 1.9, py: -0.03, pz: -1.32, ry: Math.PI },        // 坐到书桌前
+  { x: -3.0, z: -0.55, act: 'bed', px: -3.1, py: 0.0, pz: -0.72, ry: 0 },                // 坐床沿
+  { x: 3.25, z: 0.5, act: 'shelf', px: 3.42, py: 0, pz: 0.5, ry: Math.PI / 2 },          // 靠近书架
+];
+function updateInteriorGirl(delta, t, holdUmb) {
+  if (iGirl.state === 'walk') {
+    const dx = iGirl.tx - girl.position.x, dz = iGirl.tz - girl.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.16) {   // 到位 → 开始小动作
+      const sp = ROOM_SPOTS.find(sp => sp.act === iGirl.act) || ROOM_SPOTS[0];
+      iGirl.fromPos.copy(girl.position);
+      iGirl.fromRotY = girl.rotation.y;
+      iGirl.seatPos.set(sp.px, sp.py, sp.pz);
+      iGirl.seatRotY = sp.ry;
+      iGirl.blend = 0;
+      iGirl.until = t + 3.5 + Math.random() * 5;
+      iGirl.state = 'act';
+      return;
+    }
+    const st = Math.min(0.62 * delta, d);
+    girl.position.x += dx / d * st;
+    girl.position.z += dz / d * st;
+    [girl.position.x, girl.position.z] = resolveRoomClip(girl.position.x, girl.position.z, 0.26);
+    girl.rotation.y = lerpAngle(girl.rotation.y, Math.atan2(dx, dz), Math.min(1, delta * 7));
+    iGirl.phase += delta * 6.8;
+    const sw = Math.sin(iGirl.phase);
+    legL.rotation.x = sw * 0.5; legR.rotation.x = -sw * 0.5;
+    armL.rotation.x = -sw * 0.3;
+    if (!holdUmb) armR.rotation.x = sw * 0.3;
+    girl.position.y = Math.abs(sw) * 0.028;
+  } else {
+    iGirl.blend = Math.min(1, iGirl.blend + delta * 2.5);
+    const b = iGirl.blend * iGirl.blend * (3 - 2 * iGirl.blend);
+    girl.position.lerpVectors(iGirl.fromPos, iGirl.seatPos, b);
+    girl.rotation.y = lerpAngle(iGirl.fromRotY, iGirl.seatRotY, b);
+    if (iGirl.act === 'chair' || iGirl.act === 'bed') {
+      girl.position.y += Math.sin(b * Math.PI) * 0.1;
+      legL.rotation.x = legR.rotation.x = -1.4 * b;      // 坐下：腿前伸
+      armL.rotation.x = -0.5 * b;
+      if (!holdUmb) armR.rotation.x = -0.5 * b;
+      head.rotation.y = Math.sin(t * 0.5) * 0.15 * b;
+      head.rotation.x = 0.03;
+    } else {                                             // 窗前 / 书架前：站着张望
+      legL.rotation.x = legR.rotation.x = 0;
+      armL.rotation.x = -0.1 * b;
+      if (!holdUmb) armR.rotation.x = -0.1 * b;
+      head.rotation.x = 0.1 * b;
+      head.rotation.y = Math.sin(t * 0.45) * 0.18 * b;
+    }
+    girl.position.y += Math.abs(Math.sin(t * 2)) * 0.006;
+    if (t > iGirl.until && iGirl.blend >= 1) {           // 换下一个活动
+      const others = ROOM_SPOTS.filter(sp => sp.act !== iGirl.act);
+      const sp = others[(Math.random() * others.length) | 0];
+      iGirl.tx = sp.x; iGirl.tz = sp.z; iGirl.act = sp.act;
+      iGirl.state = 'walk';
+      girl.position.y = 0;
+      legL.rotation.z = legR.rotation.z = 0;
+    }
+  }
 }
 
 /* ============================================================
@@ -2005,8 +2203,14 @@ function syncDayButton() {
 ============================================================ */
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let downX = 0, downY = 0;
-renderer.domElement.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; });
+let downX = 0, downY = 0, lookX = 0, lookY = 0;
+renderer.domElement.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; lookX = e.clientX; lookY = e.clientY; });
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!interiorMode || !(e.buttons & 1)) return;   // 室内：按住拖拽环视
+  interiorCam.yaw -= (e.clientX - lookX) * 0.0052;
+  interiorCam.pitch = Math.max(-1.1, Math.min(0.5, interiorCam.pitch - (e.clientY - lookY) * 0.0042));
+  lookX = e.clientX; lookY = e.clientY;
+});
 renderer.domElement.addEventListener('pointerup', e => {
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
   pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
@@ -2014,9 +2218,16 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (girl.visible && raycaster.intersectObjects(girlMeshes, false).length) {
     cancelActivity();                          // 坐着/荡着/在屋里都要先落地
     excitedUntil = clock.elapsedTime + 2.4;
-    walk.state = 'idle';                       // 打断散步，先挥手
-    walk.idleUntil = excitedUntil + 0.6;       // 挥完手再继续走
+    walk.idleUntil = excitedUntil + 0.6;
     walk.spot = null;
+    if (girl.parent === roomGroup) {           // 在屋里：挥完手继续屋内活动
+      walk.state = 'inside';
+      iGirl.state = 'walk';
+      const sp = ROOM_SPOTS[(Math.random() * ROOM_SPOTS.length) | 0];
+      iGirl.tx = sp.x; iGirl.tz = sp.z; iGirl.act = sp.act;
+    } else {
+      walk.state = 'idle';
+    }
     return;
   }
   if (raycaster.intersectObject(cat, true).length) {
@@ -2026,6 +2237,14 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (raycaster.intersectObject(bunny, true).length) {
     bunnyState.mode = 'celebrate';             // 小兔子原地欢快蹦跳
     bunnyState.until = clock.elapsedTime + 1.4;
+    return;
+  }
+  if (interiorMode) {
+    if (raycaster.intersectObject(roomExitDoor, false).length) exitInterior();
+    return;                                    // 室内其余点击不处理
+  }
+  if (raycaster.intersectObjects(houseMeshes, false).length) {
+    enterInterior();                           // 点击房子 → 进屋看看
   }
 });
 
@@ -2273,7 +2492,12 @@ function animate() {
     if (!holdUmb) armR.rotation.x = step * 0.6;
     if (walk.blend >= 1) {
       if (walk.state === 'enter') {
-        girl.visible = false;                             // 进屋休息
+        roomGroup.add(girl);                              // 进屋：切到室内场景
+        girl.position.set(3.55, 0, 2.25);
+        girl.rotation.set(0, Math.atan2(-3.55, -2.25), 0);
+        girl.visible = true;
+        iGirl.state = 'walk';
+        iGirl.tx = 0.3; iGirl.tz = 0.2; iGirl.act = null;
         walk.state = 'inside';
       } else {
         walk.state = 'idle';
@@ -2282,13 +2506,17 @@ function animate() {
       }
     }
   } else if (walk.state === 'inside') {
-    // 在屋里休息（看不见），时间到了出门
-    if (t > walk.actUntil) {
-      girl.visible = true;
+    // 在屋里：看她走来走去 / 坐桌前 / 坐床沿 / 看窗外 / 看书架
+    updateInteriorGirl(delta, t, holdUmb);
+    if (t > walk.actUntil) {                              // 休息结束，出门
+      diorama.add(girl);
+      girl.position.set(DOOR_POS.x, 0, DOOR_POS.z);
+      girl.rotation.set(0, 0, 0);
       walk.state = 'exit';
-      [walk.fromPos, walk.toPos] = [walk.toPos.clone(), walk.approachPos.clone()];
-      walk.toRotY = Math.atan2(walk.approachPos.x - walk.fromPos.x, walk.approachPos.z - walk.fromPos.z);
-      walk.fromRotY = walk.toRotY + Math.PI;
+      walk.fromPos = girl.position.clone();
+      walk.toPos = walk.approachPos.clone();
+      walk.toRotY = Math.atan2(walk.approachPos.x - DOOR_POS.x, walk.approachPos.z - DOOR_POS.z);
+      walk.fromRotY = walk.toRotY;
     }
   } else {
     // 原地休息：呼吸、左顾右盼
@@ -2640,7 +2868,24 @@ function animate() {
     }
   }
 
-  controls.update();
+  if (interiorMode) {
+    // 室内漫游：WASD/方向键 在房间里走动
+    const mv = new THREE.Vector3();
+    if (roomKeys['w'] || roomKeys['arrowup']) mv.z -= 1;
+    if (roomKeys['s'] || roomKeys['arrowdown']) mv.z += 1;
+    if (roomKeys['a'] || roomKeys['arrowleft']) mv.x -= 1;
+    if (roomKeys['d'] || roomKeys['arrowright']) mv.x += 1;
+    if (mv.lengthSq() > 0) {
+      mv.normalize().applyAxisAngle(UP_Y, interiorCam.yaw);
+      camera.position.addScaledVector(mv, 2.4 * delta);
+      const [rx, rz] = resolveRoomClip(camera.position.x, camera.position.z, 0.3);
+      camera.position.x = rx; camera.position.z = rz;
+      camera.position.y = roomGroup.position.y + 1.45;
+    }
+    camera.rotation.set(interiorCam.pitch, interiorCam.yaw, 0);
+  } else {
+    controls.update();
+  }
   renderer.render(scene, camera);
 }
 
@@ -2660,7 +2905,11 @@ window.__yard = () => ({ env, envTarget, timeAuto, umbrellaOpen, wx: weather.kin
   upos: umbrella.getWorldPosition(new THREE.Vector3()).toArray().map(v => +v.toFixed(2)),
   gpos: girl.position.toArray().map(v => +v.toFixed(2)),
   girlScr: __scr(girl.position.clone().setY(0.8)), catScr: __scr(cat.position.clone().setY(0.3)), bunnyScr: __scr(bunny.position.clone().setY(0.15)),
+  houseScr: __scr(house.position.clone().setY(1.2)), doorScr: __scr(roomExitDoor.getWorldPosition(new THREE.Vector3())),
+  imode: interiorMode, cam: camera.position.toArray().map(v => +v.toFixed(2)),
   catY: +cat.position.y.toFixed(3), bunnyMode: bunnyState.mode, catExcited: clock.elapsedTime < catExcitedUntil });
+window.__yardEnter = () => enterInterior();
+window.__yardExit = () => exitInterior();
 window.__yardGoto = kind => {
   const s = SPOTS.find(sp => sp.kind === kind);
   if (!s) return false;
@@ -2676,6 +2925,7 @@ window.__pick = (x, y) => {
   return { cat: raycaster.intersectObject(cat, true).length, bunny: raycaster.intersectObject(bunny, true).length, girl: raycaster.intersectObjects(girlMeshes, false).length };
 };
 window.__yardHurry = () => { walk.actUntil = Math.min(walk.actUntil || Infinity, clock.elapsedTime + 0.3); };   // 调试：立刻结束当前活动
+window.__yardStay = sec => { if (walk.state === 'inside') walk.actUntil = Math.max(walk.actUntil, clock.elapsedTime + sec); };   // 调试：延长在屋时间
 window.__yardTeleport = (x, z) => { cancelActivity(); girl.position.set(x, 0, z); walk.state = 'idle'; walk.idleUntil = 1e9; };   // 调试：原地站定
 window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
 animate();

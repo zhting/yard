@@ -95,7 +95,7 @@
   <p>A LITTLE COURTYARD · 3D DIORAMA</p>
 </div>
 <div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩 / 小猫 / 小兔 · 点房子进屋</div>
-<div id="ihint" style="display:none">🏠 WASD / 方向键 走动 · 按住拖拽 环视 · ESC 或点「回到院子」离开</div>
+<div id="ihint" style="display:none">🏠 WASD / 方向键 走动 · 按住拖拽 环视 · 点门离开 · ESC 或点「回到院子」</div>
 <div id="clock"><span id="clockTime">北京 --:--</span><span class="temp" id="clockWx"></span><span class="temp" id="clockTemp"></span></div>
 <div id="panel">
   <select id="citySelect" aria-label="城市"></select>
@@ -597,6 +597,7 @@ for (const side of [-1, 1]) {
 const hedgeMat = mat(0x5faf58);
 for (let i = 0; i < 7; i++) {
   const hx = -9.5 + i * 3.2;
+  if (Math.abs(hx + 8.2) < 1.6) continue;   // 跳过后窗正对的那丛，免得贴在玻璃上成绿块
   const bush = mesh(sph(0.62, 12), hedgeMat, hx, 0.38, -9.35);
   bush.scale.set(1.15, 0.72, 0.95);
   diorama.add(bush);
@@ -923,7 +924,22 @@ const bigTree = makeTreeOn(diorama, 5.6, -4.6, 1.25);
 trees.push(bigTree);
 trees.push(makeTreeOn(diorama, -9.2, 6.4, 0.85, 'pink'));
 trees.push(makeTreeOn(diorama, 10.2, 8.4, 0.7, 'pink'));
-trees.push(makeTreeOn(diorama, -8.35, -9.55, 0.8));   // 屋后，从起居室后窗能看见树冠与篱笆
+{
+  // 屋后专用树：树冠抬高、球变小，后窗看到树干+篱笆+天空，而不是贴玻璃的绿球
+  const backTree = new THREE.Group();
+  backTree.position.set(-7.35, 0, -10.35);
+  backTree.add(mesh(cyl(0.11, 0.16, 2.35, 8), trunkMat, 0, 1.18, 0));
+  const bf = new THREE.Group();
+  bf.position.y = 2.62;
+  const blm = leafMats.green;
+  for (const [ox, oy, oz, rr] of [[0, 0.28, 0, 0.62], [0.42, 0.12, 0.18, 0.4], [-0.38, 0.16, -0.12, 0.38]])
+    bf.add(mesh(sph(rr, 14), blm, ox, oy, oz));
+  backTree.add(bf);
+  backTree.userData.foliage = bf;
+  backTree.userData.phase = 1.7;
+  diorama.add(backTree);
+  trees.push(backTree);
+}
 
 /* ---------- 樱花瓣飘落 ---------- */
 const EMITTERS = [new THREE.Vector3(-9.2, 2.8, 6.4), new THREE.Vector3(10.2, 2.1, 8.4)];
@@ -1045,7 +1061,7 @@ for (let i = 0; i < 6; i++) tulip(2 + Math.random() * 2.6, 6.4 + Math.random() *
 sunflower(9.4, 6.4, 1.15); sunflower(10.1, 5.6, 0.95); sunflower(8.7, 5.5, 1.0);
 // 灌木
 const bushMat = mat(0x5cb050);
-for (const [x, z, s] of [[-10.8, -8.6, 1], [10.8, -8.4, 1.1], [10.6, 8.8, 0.9], [-10.6, 8.6, 0.95]]) {
+for (const [x, z, s] of [[-11.2, -9.4, 0.85], [10.8, -8.4, 1.1], [10.6, 8.8, 0.9], [-10.6, 8.6, 0.95]]) {
   const b = mesh(sph(0.75 * s), bushMat, x, 0.55 * s, z);
   b.scale.y = 0.8;
   fluffify(b, { layers: 4, growth: 0.06, tint: 0.12 });
@@ -1673,7 +1689,7 @@ function resolveRoomClip(x, z, r) {
   }
   return [Math.max(-4.05, Math.min(4.05, x)), Math.max(-2.95, Math.min(2.95, z))];
 }
-let roomExitDoor;
+let roomExitDoor, doorExitHit;
 {
   const floorMat = mat(0xc4a06a);   // toon 木地板，不受草地半球光染绿
   const wallMat = mat(0xf7ecd8);
@@ -1821,7 +1837,8 @@ let roomExitDoor;
   // 冰箱
   roomGroup.add(mesh(box(0.75, 1.9, 0.7), mat(0xf4f7f5), 4.15, 0.95, 2.8));
   roomGroup.add(mesh(box(0.04, 0.5, 0.05), trimMat, 3.76, 1.25, 2.6));
-  // 出口的门（铰在门洞左侧并敞开，点击门扇离开；门洞对着真实前院）
+  // 出口的门（铰在门洞左侧并敞开，门洞对着真实前院）
+  // 门扇 90° 敞开后几乎侧对镜头，点「看得见的门」经常点空；门洞里放透明点击板
   roomExitDoor = new THREE.Group();
   roomExitDoor.position.set(-3.25, 1.55, 3.42);
   roomExitDoor.rotation.y = 1.55;
@@ -1829,6 +1846,13 @@ let roomExitDoor;
   exitLeaf.add(mesh(sph(0.05, 8), mat(0xf0d896), 0.7, 0, 0.08));
   roomExitDoor.add(exitLeaf);
   roomGroup.add(roomExitDoor);
+  doorExitHit = mesh(box(1.88, 3.08, 0.28),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
+    -2.3, 1.55, 3.48);
+  doorExitHit.castShadow = false;
+  doorExitHit.receiveShadow = false;
+  doorExitHit.userData.exitDoor = true;
+  roomGroup.add(doorExitHit);
 }
 function enterInterior() {
   if (interiorMode) return;
@@ -2419,6 +2443,12 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
   pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
+  // 室内点门优先：门扇已敞开，点门洞/外壳门/室内门扇都应离开。
+  // 须先于小猫/兔子检测——它们在院子里，射线穿过门洞会先打到它们，把门点击吃掉。
+  if (interiorMode) {
+    const doorObjs = [roomExitDoor, doorG, doorExitHit].filter(Boolean);
+    if (raycaster.intersectObjects(doorObjs, true).length) { exitInterior(); return; }
+  }
   if (girl.visible && raycaster.intersectObjects(girlMeshes, false).length) {
     cancelActivity();                          // 坐着/荡着/在屋里都要先落地
     excitedUntil = clock.elapsedTime + 2.4;
@@ -2443,10 +2473,7 @@ renderer.domElement.addEventListener('pointerup', e => {
     bunnyState.until = clock.elapsedTime + 1.4;
     return;
   }
-  if (interiorMode) {
-    if (raycaster.intersectObject(roomExitDoor, true).length) exitInterior();
-    return;                                    // 室内其余点击不处理
-  }
+  if (interiorMode) return;                    // 室内其余点击不处理
   if (raycaster.intersectObjects(houseMeshes, false).length) {
     enterInterior();                           // 点击房子 → 进屋看看
   }
@@ -3130,22 +3157,45 @@ window.__yardGoto = kind => {
 window.__pick = (x, y) => {
   pointer.set((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  return { cat: raycaster.intersectObject(cat, true).length, bunny: raycaster.intersectObject(bunny, true).length, girl: raycaster.intersectObjects(girlMeshes, false).length };
+  const doorObjs = [roomExitDoor, doorG, doorExitHit].filter(Boolean);
+  return {
+    cat: raycaster.intersectObject(cat, true).length,
+    bunny: raycaster.intersectObject(bunny, true).length,
+    girl: raycaster.intersectObjects(girlMeshes, false).length,
+    door: raycaster.intersectObjects(doorObjs, true).length,
+    house: raycaster.intersectObjects(houseMeshes, false).length
+  };
 };
 window.__yardHurry = () => { walk.actUntil = Math.min(walk.actUntil || Infinity, clock.elapsedTime + 0.3); };   // 调试：立刻结束当前活动
 window.__yardStay = sec => { if (walk.state === 'inside') walk.actUntil = Math.max(walk.actUntil, clock.elapsedTime + sec); };   // 调试：延长在屋时间
 window.__yardTeleport = (x, z) => { cancelActivity(); girl.position.set(x, 0, z); walk.state = 'idle'; walk.idleUntil = 1e9; };   // 调试：原地站定
 window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
+window.__yardClickDoor = () => {
+  camera.updateMatrixWorld(true);
+  const w = new THREE.Vector3();
+  (doorExitHit || roomExitDoor).getWorldPosition(w);
+  const p = w.clone().project(camera);
+  const x = (p.x * 0.5 + 0.5) * innerWidth;
+  const y = (-p.y * 0.5 + 0.5) * innerHeight;
+  const el = renderer.domElement;
+  const base = { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse' };
+  el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({ buttons: 1 }, base)));
+  el.dispatchEvent(new PointerEvent('pointerup', Object.assign({ buttons: 0 }, base)));
+  return { x: Math.round(x), y: Math.round(y), imode: interiorMode, pick: window.__pick(x, y) };
+};
 {
   const q = new URLSearchParams(location.search);
-  if (q.has('inside')) {
+  if (q.has('inside') || q.has('clickdoor')) {
     enterInterior();
-    const cam = q.get('cam');
+    const cam = q.get('cam') || (q.has('clickdoor') ? '-2.3,2.1,3.1416' : '');
     if (cam) {
       const [x, z, yaw] = cam.split(',').map(Number);
       if (Number.isFinite(x)) camL.x = x;
       if (Number.isFinite(z)) camL.z = z;
       if (Number.isFinite(yaw)) interiorCam.yaw = yaw;
+    }
+    if (q.has('clickdoor')) {
+      setTimeout(() => { window.__doorClickResult = window.__yardClickDoor(); }, 600);
     }
   }
 }

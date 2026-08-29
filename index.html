@@ -537,6 +537,7 @@ for (let i = 0; i < 70; i++) {
   const x = -12 + Math.random() * 24;
   const z = -10 + Math.random() * 20;
   if (Math.hypot((x - 5) / 2.5, (z - 4) / 1.9) < 1.15) continue;   // 避开池塘
+  if (Math.hypot(x + 6.2, z + 6.2) < 3.8) continue;               // 避开房子（免得草丛从地板钻出来）
   const tuft = new THREE.Group();
   for (let k = 0; k < 3; k++) {
     const blade = mesh(new THREE.ConeGeometry(0.05, 0.28 + Math.random() * 0.2, 5), tuftMat,
@@ -592,11 +593,18 @@ for (const side of [-1, 1]) {
   diorama.add(pivot);
 }
 
-// 后排小树篱（低矮，增加层次）
+// 后排小树篱（圆滚滚的灌木，从屋里后窗看是树丛而不是色块）
 const hedgeMat = mat(0x5faf58);
 for (let i = 0; i < 7; i++) {
-  const h = mesh(box(2.6, 0.5, 0.9), hedgeMat, -9.5 + i * 3.2, 0.25, -9.3);
-  diorama.add(h);
+  const hx = -9.5 + i * 3.2;
+  const bush = mesh(sph(0.62, 12), hedgeMat, hx, 0.38, -9.35);
+  bush.scale.set(1.15, 0.72, 0.95);
+  diorama.add(bush);
+  if (i % 2 === 0) {
+    const b2 = mesh(sph(0.38, 10), mat(0x6dbb60), hx + 0.7, 0.28, -9.05);
+    b2.scale.y = 0.7;
+    diorama.add(b2);
+  }
 }
 
 // 门柱 + 灯笼（夜晚点亮）
@@ -740,17 +748,22 @@ diorama.add(house);
 
 // 墙体（四面，前墙留门洞+窗洞、后墙留窗洞、右墙留窗洞，与屋内房间一一对应）
 const houseWall = mat(0xfff0d6);
-const HW = (w, h, d, x, y, z) => house.add(mesh(box(w, h, d), houseWall, x, y, z));
+const shellWalls = [];
+const HW = (w, h, d, x, y, z) => {
+  const m = mesh(box(w, h, d), houseWall, x, y, z);
+  shellWalls.push(m);
+  house.add(m);
+};
 HW(0.15, 2.4, 3.7, -2.325, 1.2, 0);            // 左墙
 // 右墙（窗洞 z -0.95..0.15，y 0.85..1.85）
 HW(0.15, 2.4, 0.9, 2.325, 1.2, -1.4);
 HW(0.15, 2.4, 1.7, 2.325, 1.2, 1.0);
 HW(0.15, 0.55, 1.1, 2.325, 2.125, -0.4);
 HW(0.15, 0.85, 1.1, 2.325, 0.425, -0.4);
-// 后墙（窗洞 x -2.4..-1.45，y 0.85..1.85）
+// 后墙（窗洞 x -2.5..-1.35，y 0.85..1.85，与前/侧窗同高，从屋里能看见后院）
 HW(3.85, 2.4, 0.15, 0.475, 1.2, -1.775);
-HW(1.15, 0.2, 0.15, -1.925, 2.3, -1.775);
-HW(1.15, 1.3, 0.15, -1.925, 0.65, -1.775);
+HW(1.15, 0.55, 0.15, -1.925, 2.125, -1.775);
+HW(1.15, 0.85, 0.15, -1.925, 0.425, -1.775);
 // 前墙（门洞 x -1.625..-0.675；窗洞 x 0.4..1.5，y 0.85..1.85）
 HW(0.775, 2.4, 0.15, -2.0125, 1.2, 1.775);
 HW(1.075, 2.4, 0.15, -0.1375, 1.2, 1.775);
@@ -791,9 +804,12 @@ house.add(mesh(sph(0.1, 12), mat(0xa84a3d), -2.66, 3.5, 0));
 // 檐口线条
 house.add(mesh(box(5.0, 0.1, 0.14), mat(0xffffff), 0, 2.44, 1.83));
 house.add(mesh(box(5.0, 0.1, 0.14), mat(0xffffff), 0, 2.44, -1.83));
-// 门
-const doorG = mesh(box(0.95, 1.55, 0.12), mat(0xa06a42), -1.15, 0.78, 1.87);
-doorG.add(mesh(sph(0.05, 10), mat(0xf0d896), 0.32, 0, 0.09));
+// 门（铰在门洞左侧，打开后能从屋里看到院子）
+const doorG = new THREE.Group();
+doorG.position.set(-1.625, 0.78, 1.87);
+const doorLeaf = mesh(box(0.95, 1.55, 0.12), mat(0xa06a42), 0.475, 0, 0);
+doorLeaf.add(mesh(sph(0.05, 10), mat(0xf0d896), 0.32, 0, 0.09));
+doorG.add(doorLeaf);
 house.add(doorG);
 // 门廊台阶 + 门垫
 house.add(mesh(box(1.9, 0.12, 0.7), mat(0xe2dac9), -1.15, 0.06, 2.3));
@@ -828,7 +844,7 @@ function windowAt(x, y, z, ry = 0) {
   house.add(g);
 }
 windowAt(0.95, 1.35, 1.87);
-windowAt(-2.0, 1.5, -1.87, Math.PI);
+windowAt(-2.0, 1.35, -1.87, Math.PI);
 windowAt(2.41, 1.35, -0.4, Math.PI / 2);
 
 // 窗台花箱（精细节）
@@ -848,21 +864,18 @@ function flowerBox(wx, wy, wz, ry) {
 }
 flowerBox(0.95, 1.35, 1.87, 0);
 flowerBox(2.41, 1.35, -0.4, Math.PI / 2);
-flowerBox(-2.0, 1.5, -1.87, Math.PI);
+flowerBox(-2.0, 1.35, -1.87, Math.PI);
 
 // 烟囱
 house.add(mesh(box(0.55, 1.1, 0.55), mat(0xc46a52), 1.5, 3.35, -0.5));
 house.add(mesh(box(0.7, 0.16, 0.7), mat(0xa85642), 1.5, 3.92, -0.5));
 
-// 屋后窗外的绿篱墙（从屋里望出去满窗绿意）+ 窗前小花坛
-diorama.add(mesh(box(3.0, 2.3, 0.8), mat(0x5faf58), -8.2, 1.15, -8.75));
-diorama.add(mesh(box(3.1, 0.25, 0.9), mat(0x6dbb60), -8.2, 2.35, -8.75));
-diorama.add(mesh(box(2.8, 0.55, 0.9), mat(0x8ec963), -8.2, 0.28, -8.75));
-diorama.add(mesh(box(2.9, 0.12, 1.0), mat(0xa87845), -8.2, 0.58, -8.75));
+// 屋后小花坛（矮，不挡后窗；从屋里能看见草坪、篱笆与灌木）
+diorama.add(mesh(box(2.4, 0.14, 0.5), mat(0xa87845), -8.1, 0.07, -8.55));
 for (let i = 0; i < 4; i++) {
-  const fx = -9.2 + i * 0.68;
-  diorama.add(mesh(cyl(0.03, 0.035, 0.4, 6), mat(0x58a447), fx, 0.78, -8.75));
-  diorama.add(mesh(sph(0.09, 10), mat([0xf26d6d, 0xf7b733, 0xef8fb5, 0xfff6ea][i]), fx, 1.0, -8.75));
+  const fx = -9.0 + i * 0.62;
+  diorama.add(mesh(cyl(0.03, 0.035, 0.2, 6), mat(0x58a447), fx, 0.24, -8.55));
+  diorama.add(mesh(sph(0.08, 10), mat([0xf26d6d, 0xf7b733, 0xef8fb5, 0xfff6ea][i]), fx, 0.38, -8.55));
 }
 
 const smoke = [];
@@ -910,6 +923,7 @@ const bigTree = makeTreeOn(diorama, 5.6, -4.6, 1.25);
 trees.push(bigTree);
 trees.push(makeTreeOn(diorama, -9.2, 6.4, 0.85, 'pink'));
 trees.push(makeTreeOn(diorama, 10.2, 8.4, 0.7, 'pink'));
+trees.push(makeTreeOn(diorama, -8.35, -9.55, 0.8));   // 屋后，从起居室后窗能看见树冠与篱笆
 
 /* ---------- 樱花瓣飘落 ---------- */
 const EMITTERS = [new THREE.Vector3(-9.2, 2.8, 6.4), new THREE.Vector3(10.2, 2.1, 8.4)];
@@ -1607,16 +1621,15 @@ function cancelActivity() {
    房屋内部（点击房子进入：WASD/方向键 走动 · 按住拖拽 环视）
    内部就建在真实房子里（缩放 0.5），门窗洞与外壳一一对齐
 ============================================================ */
-const roomGroup = new THREE.Group();
-roomGroup.position.set(house.position.x, 0, house.position.z);
-roomGroup.scale.setScalar(0.5);
-scene.add(roomGroup);
-const HP = { x: house.position.x, z: house.position.z };   // 房屋原点（室内局部坐标 → 世界的换算基准）
 const houseMeshes = [];
 house.traverse(o => { if (o.isMesh) houseMeshes.push(o); });
+const roomGroup = new THREE.Group();
+roomGroup.scale.setScalar(0.5);
+house.add(roomGroup);   // 真正嵌在房子里，局部坐标 ×0.5 = 外壳坐标
+const HP = { x: house.position.x, z: house.position.z };   // 房屋原点（室内局部坐标 → 世界的换算基准）
 let interiorMode = false;
-const interiorCam = { yaw: 0, pitch: -0.05, pos: new THREE.Vector3(), target: new THREE.Vector3() };
-const camL = { x: -2.0, z: 2.6 };   // 室内相机在房间局部坐标系里的位置
+const interiorCam = { yaw: 0, pitch: -0.08, pos: new THREE.Vector3(), target: new THREE.Vector3() };
+const camL = { x: -2.0, z: 1.8 };   // 室内相机：进门后往里一步，避免贴在门板上
 const roomKeys = {};
 const UP_Y = new THREE.Vector3(0, 1, 0);
 const hint = document.getElementById('hint');
@@ -1644,6 +1657,10 @@ const ROOM_SOLID = [
   [3.12, 3.28, -1.2, 3.6],
   [-4.6, -3.25, 3.42, 3.7],       // 前墙（门洞 x -3.25..-1.35）
   [-1.35, 4.6, 3.42, 3.7],
+  [-2.85, 4.55, -3.7, -3.38],     // 后墙（窗洞 x -4.51..-2.9）
+  [-4.7, -4.38, -3.5, 3.5],       // 左墙
+  [4.38, 4.7, -3.5, -2.0],        // 右墙（窗洞 z -1.9..0.3）
+  [4.38, 4.7, 0.4, 3.5],
 ];
 function resolveRoomClip(x, z, r) {
   for (const [x1, x2, z1, z2] of ROOM_SOLID) {
@@ -1654,37 +1671,44 @@ function resolveRoomClip(x, z, r) {
       else if (m === dz1) z = z1 - r; else z = z2 + r;
     }
   }
-  return [Math.max(-4.35, Math.min(4.35, x)), Math.max(-3.35, Math.min(3.3, z))];
+  return [Math.max(-4.05, Math.min(4.05, x)), Math.max(-2.95, Math.min(2.95, z))];
 }
 let roomExitDoor;
 {
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0xd9b384, roughness: 0.9 });
+  const floorMat = mat(0xc4a06a);   // toon 木地板，不受草地半球光染绿
   const wallMat = mat(0xf7ecd8);
   const trimMat = mat(0xd8c6a8);
-  roomGroup.add(mesh(box(9.2, 0.26, 7.2), floorMat, 0, -0.13, 0));
+  const plankMat = mat(0xb08958);
+  roomGroup.add(mesh(box(9.2, 0.2, 7.2), floorMat, 0, 0.06, 0));    // 顶面局部 0.16 → 世界 0.08，压住草坪
+  for (let i = -4; i <= 4; i++)
+    roomGroup.add(mesh(box(0.045, 0.018, 7.15), plankMat, i * 1.02, 0.17, 0));
   const wallSeg = (w, h, d, x, y, z) => roomGroup.add(mesh(box(w, h, d), wallMat, x, y, z));
-  // 后墙（窗洞对齐外壳后窗：局部 x -4.6..-2.9，y 1.0..3.1）
-  wallSeg(3.85, 3.1, 0.18, 0.475, 1.55, -3.51);
-  wallSeg(1.7, 1.9, 0.18, -3.75, 0.95, -3.51);
-  // 左墙（整面）
-  wallSeg(0.18, 3.1, 7.2, -4.51, 1.55, 0);
+  const WH = 4.5, WY = 2.25;   // 墙顶对齐外壳内净高，窗洞 y 1.7..3.7 = 外壳 0.85..1.85
+  // 后墙（窗洞对齐外壳后窗：局部 x -4.51..-2.9）
+  wallSeg(7.41, WH, 0.18, 0.805, WY, -3.51);
+  wallSeg(1.61, 1.7, 0.18, -3.705, 0.85, -3.51);
+  wallSeg(1.61, 0.8, 0.18, -3.705, 4.1, -3.51);
+  // 左墙（整面，外壳左侧无窗）
+  wallSeg(0.18, WH, 7.2, -4.51, WY, 0);
   // 右墙（窗洞对齐外壳右窗：局部 z -1.9..0.3）
-  wallSeg(0.18, 3.1, 1.7, 4.51, 1.55, -2.75);
-  wallSeg(0.18, 3.1, 3.3, 4.51, 1.55, 1.95);
-  wallSeg(0.18, 0.7, 2.2, 4.51, 2.75, -0.8);
-  wallSeg(0.18, 1.1, 2.2, 4.51, 0.55, -0.8);
-  // 前墙（门洞对齐外壳门：局部 x -3.25..-1.35；窗洞对齐外壳前窗：局部 x 0.8..3.0）
-  wallSeg(1.35, 3.1, 0.18, -3.925, 1.55, 3.51);
-  wallSeg(2.15, 3.1, 0.18, -0.275, 1.55, 3.51);
-  wallSeg(1.6, 3.1, 0.18, 3.8, 1.55, 3.51);
-  wallSeg(2.0, 1.0, 0.18, 1.9, 0.5, 3.51);
+  wallSeg(0.18, WH, 1.61, 4.51, WY, -2.705);
+  wallSeg(0.18, WH, 3.21, 4.51, WY, 1.905);
+  wallSeg(0.18, 0.8, 2.2, 4.51, 4.1, -0.8);
+  wallSeg(0.18, 1.7, 2.2, 4.51, 0.85, -0.8);
+  // 前墙（门洞对齐外壳门：x -3.25..-1.35；窗洞对齐外壳前窗：x 0.8..3.0）
+  wallSeg(1.26, WH, 0.18, -3.88, WY, 3.51);
+  wallSeg(2.15, WH, 0.18, -0.275, WY, 3.51);
+  wallSeg(1.51, WH, 0.18, 3.755, WY, 3.51);
+  wallSeg(1.9, 1.4, 0.18, -2.3, 3.8, 3.51);   // 门洞上沿（外壳门高 1.55 → 局部 3.1）
+  wallSeg(2.2, 1.7, 0.18, 1.9, 0.85, 3.51);
+  wallSeg(2.2, 0.8, 0.18, 1.9, 4.1, 3.51);
   // 两道隔墙：起居室 | 卧室 | 厨房（各留门洞）
-  wallSeg(0.16, 3.1, 4.0, -1.2, 1.55, -1.6);
-  wallSeg(0.16, 3.1, 2.0, -1.2, 1.55, 2.6);
-  wallSeg(0.16, 3.1, 1.2, 3.2, 1.55, -3.0);
-  wallSeg(0.16, 3.1, 4.8, 3.2, 1.55, 1.2);
-  // 天花板
-  roomGroup.add(mesh(box(9.2, 0.14, 7.2), mat(0xefe0c8), 0, 3.12, 0));
+  wallSeg(0.16, WH, 4.0, -1.2, WY, -1.6);
+  wallSeg(0.16, WH, 2.0, -1.2, WY, 2.6);
+  wallSeg(0.16, WH, 1.2, 3.2, WY, -3.0);
+  wallSeg(0.16, WH, 4.8, 3.2, WY, 1.2);
+  // 天花板（抬高，不再挡住窗洞上沿）
+  roomGroup.add(mesh(box(9.2, 0.14, 7.2), mat(0xefe0c8), 0, 4.55, 0));
   // 窗框（三扇窗，位置与外壳窗洞一致）
   const winFrame = (x, z, alongX, cy = 2.05, H = 2.02) => {
     const L = 1.8;
@@ -1707,9 +1731,9 @@ let roomExitDoor;
       roomGroup.add(mesh(box(0.3, 0.07, L + 0.2), trimMat, x + 0.12, cy - H / 2 - 0.02, z));
     }
   };
-  winFrame(-3.75, -3.42, true, 2.5, 1.2);    // 起居室高窗 → 看后院绿树
-  winFrame(1.9, 3.42, true);       // 卧室 → 看前院
-  winFrame(4.42, -0.8, false);     // 厨房 → 看侧面院子
+  winFrame(-3.705, -3.42, true, 2.7, 2.0);  // 起居室后窗 → 真后院
+  winFrame(1.9, 3.42, true, 2.7, 2.0);       // 卧室前窗 → 真前院
+  winFrame(4.42, -0.8, false, 2.7, 2.0);     // 厨房侧窗 → 真侧院
   // 小床（前窗下方）
   roomGroup.add(mesh(box(1.7, 0.34, 2.4), woodMat, 1.9, 0.17, 2.2));
   roomGroup.add(mesh(box(1.7, 0.5, 0.12), woodDark, 1.9, 0.55, 3.32));
@@ -1729,10 +1753,10 @@ let roomExitDoor;
   roomGroup.add(mesh(box(0.8, 0.45, 0.5), mat(0x5fa8dc), -0.7, 0.23, 2.9));
   roomGroup.add(mesh(box(0.82, 0.08, 0.52), woodMat, -0.7, 0.49, 2.9));
   // 卧室窗两侧的窗帘
-  roomGroup.add(mesh(box(0.35, 1.9, 0.08), mat(0xf6c9d4), 0.95, 2.0, 3.35));
-  roomGroup.add(mesh(box(0.35, 1.9, 0.08), mat(0xf6c9d4), 2.85, 2.0, 3.35));
+  roomGroup.add(mesh(box(0.35, 2.2, 0.08), mat(0xf6c9d4), 0.85, 2.7, 3.35));
+  roomGroup.add(mesh(box(0.35, 2.2, 0.08), mat(0xf6c9d4), 2.95, 2.7, 3.35));
   // 圆地毯（起居室中央）
-  const rug = mesh(new THREE.CircleGeometry(1.55, 30), mat(0xf2b8c6), -2.9, 0.016, 0.3);
+  const rug = mesh(new THREE.CircleGeometry(1.55, 30), mat(0xf2b8c6), -2.9, 0.175, 0.3);
   rug.rotation.x = -Math.PI / 2; rug.castShadow = false;
   roomGroup.add(rug);
   // 书桌 + 椅子（后窗前，桌上放着书和茶杯）
@@ -1762,9 +1786,9 @@ let roomExitDoor;
   roomGroup.add(mesh(sph(0.1, 12), mat(0xffffff), -2.9, 0.53, 0.55));
   roomGroup.add(mesh(cyl(0.02, 0.03, 0.11, 8), mat(0xffffff), -2.77, 0.55, 0.53));
   // 吊灯（起居室中央）
-  roomGroup.add(mesh(cyl(0.015, 0.015, 0.55, 6), mat(0x6b5a48), -2.9, 2.85, 0.3));
-  roomGroup.add(mesh(cyl(0.3, 0.16, 0.26, 12), mat(0xf2c66d, { side: THREE.DoubleSide }), -2.9, 2.5, 0.3));
-  roomGroup.add(mesh(sph(0.07, 10), mat(0xfff2cf, { emissive: 0xffe9b0, emissiveIntensity: 0.9 }), -2.9, 2.42, 0.3));
+  roomGroup.add(mesh(cyl(0.015, 0.015, 1.2, 6), mat(0x6b5a48), -2.9, 3.9, 0.3));
+  roomGroup.add(mesh(cyl(0.3, 0.16, 0.26, 12), mat(0xf2c66d, { side: THREE.DoubleSide }), -2.9, 3.2, 0.3));
+  roomGroup.add(mesh(sph(0.07, 10), mat(0xfff2cf, { emissive: 0xffe9b0, emissiveIntensity: 0.9 }), -2.9, 3.12, 0.3));
   // 落地灯（前门旁暖光）
   roomGroup.add(mesh(cyl(0.16, 0.2, 0.06, 12), woodDark, -4.2, 0.03, 2.7));
   roomGroup.add(mesh(cyl(0.045, 0.045, 1.5, 8), woodDark, -4.2, 0.78, 2.7));
@@ -1773,7 +1797,7 @@ let roomExitDoor;
   roomLamp.position.set(-4.2, 1.95, 2.7);
   roomGroup.add(roomLamp);
   const roomFill = new THREE.PointLight(0xfff2e0, 1.2, 16, 2);
-  roomFill.position.set(-2.5, 2.5, 0.2);
+  roomFill.position.set(-2.5, 3.2, 0.2);
   roomGroup.add(roomFill);
   // 墙上的小画（后墙书桌旁）
   roomGroup.add(mesh(box(0.95, 0.72, 0.06), mat(0xd8b26a), -2.2, 1.85, -3.4));
@@ -1784,7 +1808,7 @@ let roomExitDoor;
   roomGroup.add(mesh(box(0.45, 0.1, 0.7), mat(0xbfd8e0), 4.15, 0.82, -0.5));
   roomGroup.add(mesh(box(0.04, 0.5, 0.3), trimMat, 3.86, 0.62, -1.3));
   roomGroup.add(mesh(box(0.04, 0.5, 0.3), trimMat, 3.86, 0.62, 0.3));
-  roomGroup.add(mesh(box(0.4, 0.7, 2.2), mat(0xf0e6d0), 4.3, 2.35, -0.5));
+  roomGroup.add(mesh(box(0.4, 0.7, 1.2), mat(0xf0e6d0), 4.3, 2.35, 1.7));  // 吊柜挪开，不挡右窗
   for (let i = 0; i < 3; i++)
     roomGroup.add(mesh(cyl(0.09, 0.11, 0.24, 10), mat([0xd9784f, 0x5fa8dc, 0xf2c14e][i]), 4.15, 0.98, -1.3 + i * 0.6));
   roomGroup.add(mesh(cyl(0.09, 0.07, 0.14, 8), mat(0xd9784f), 4.15, 0.91, 0.4));
@@ -1797,21 +1821,28 @@ let roomExitDoor;
   // 冰箱
   roomGroup.add(mesh(box(0.75, 1.9, 0.7), mat(0xf4f7f5), 4.15, 0.95, 2.8));
   roomGroup.add(mesh(box(0.04, 0.5, 0.05), trimMat, 3.76, 1.25, 2.6));
-  // 出口的门（前墙门洞里，点击离开）
-  roomExitDoor = mesh(box(0.95, 1.9, 0.1), mat(0xa06a42), -2.3, 0.95, 3.45);
+  // 出口的门（铰在门洞左侧并敞开，点击门扇离开；门洞对着真实前院）
+  roomExitDoor = new THREE.Group();
+  roomExitDoor.position.set(-3.25, 1.55, 3.42);
+  roomExitDoor.rotation.y = 1.55;
+  const exitLeaf = mesh(box(1.9, 3.1, 0.1), mat(0xa06a42), 0.95, 0, 0);
+  exitLeaf.add(mesh(sph(0.05, 8), mat(0xf0d896), 0.7, 0, 0.08));
+  roomExitDoor.add(exitLeaf);
   roomGroup.add(roomExitDoor);
-  roomGroup.add(mesh(sph(0.04, 8), mat(0xf0d896), -1.95, 0.95, 3.38));
 }
 function enterInterior() {
   if (interiorMode) return;
   interiorMode = true;
+  camera.fov = 52;
+  camera.near = 0.06;
+  camera.updateProjectionMatrix();
   controls.enabled = false;
   interiorCam.pos.copy(camera.position);
   interiorCam.target.copy(controls.target);
   camera.rotation.order = 'YXZ';
-  camL.x = -2.0; camL.z = 2.6;
-  interiorCam.yaw = 0;      // 从前门看向后窗书桌
-  interiorCam.pitch = -0.05;
+  camL.x = -2.0; camL.z = 1.8;
+  interiorCam.yaw = 0;      // 从前门看向后窗书桌，透过后窗是真院子
+  interiorCam.pitch = -0.08;
   ihint.style.display = '';
   btnExit.style.display = '';
   hint.style.display = 'none';
@@ -1819,6 +1850,9 @@ function enterInterior() {
 function exitInterior() {
   if (!interiorMode) return;
   interiorMode = false;
+  camera.fov = 40;
+  camera.near = 0.1;
+  camera.updateProjectionMatrix();
   controls.enabled = true;
   camera.position.copy(interiorCam.pos);
   controls.target.copy(interiorCam.target);
@@ -2410,7 +2444,7 @@ renderer.domElement.addEventListener('pointerup', e => {
     return;
   }
   if (interiorMode) {
-    if (raycaster.intersectObject(roomExitDoor, false).length) exitInterior();
+    if (raycaster.intersectObject(roomExitDoor, true).length) exitInterior();
     return;                                    // 室内其余点击不处理
   }
   if (raycaster.intersectObjects(houseMeshes, false).length) {
@@ -2733,7 +2767,7 @@ function animate() {
   }
   swingPivot.rotation.x = Math.sin(t * 0.85) * 0.22;
   // 屋门：小女孩进出屋时缓缓敞开
-  const doorWant = (walk.state === 'enter' || walk.state === 'inside' || walk.state === 'exit') ? -1.15 : 0;
+  const doorWant = (interiorMode || walk.state === 'enter' || walk.state === 'inside' || walk.state === 'exit') ? 1.65 : 0;
   doorG.rotation.y += (doorWant - doorG.rotation.y) * Math.min(1, delta * 3.5);
   for (const tr of trees) {
     tr.userData.foliage.rotation.z = Math.sin(t * 0.9 + tr.userData.phase) * 0.028;
@@ -3052,7 +3086,7 @@ function animate() {
       camL.z += mv.z * 1.3 * delta;
       [camL.x, camL.z] = resolveRoomClip(camL.x, camL.z, 0.3);
     }
-    camera.position.set(HP.x + camL.x * 0.5, 0.35 + 0.65, HP.z + camL.z * 0.5);
+    camera.position.set(HP.x + camL.x * 0.5, 1.22, HP.z + camL.z * 0.5);
     camera.rotation.set(interiorCam.pitch, interiorCam.yaw, 0);
   } else {
     controls.update();
@@ -3102,6 +3136,19 @@ window.__yardHurry = () => { walk.actUntil = Math.min(walk.actUntil || Infinity,
 window.__yardStay = sec => { if (walk.state === 'inside') walk.actUntil = Math.max(walk.actUntil, clock.elapsedTime + sec); };   // 调试：延长在屋时间
 window.__yardTeleport = (x, z) => { cancelActivity(); girl.position.set(x, 0, z); walk.state = 'idle'; walk.idleUntil = 1e9; };   // 调试：原地站定
 window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
+{
+  const q = new URLSearchParams(location.search);
+  if (q.has('inside')) {
+    enterInterior();
+    const cam = q.get('cam');
+    if (cam) {
+      const [x, z, yaw] = cam.split(',').map(Number);
+      if (Number.isFinite(x)) camL.x = x;
+      if (Number.isFinite(z)) camL.z = z;
+      if (Number.isFinite(yaw)) interiorCam.yaw = yaw;
+    }
+  }
+}
 animate();
 </script>
 </body>

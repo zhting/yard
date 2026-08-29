@@ -1575,6 +1575,7 @@ function cancelActivity() {
 const roomGroup = new THREE.Group();
 roomGroup.position.set(0, -60, 0);
 scene.add(roomGroup);
+const gardenButterflies = [];
 const houseMeshes = [];
 house.traverse(o => { if (o.isMesh) houseMeshes.push(o); });
 let interiorMode = false;
@@ -1585,11 +1586,27 @@ const hint = document.getElementById('hint');
 const ihint = document.getElementById('ihint');
 const btnExit = document.getElementById('btnExit');
 // 家具占位（防穿墙/穿家具）：[x1, x2, z1, z2]
+// 家具与墙体占位（防穿模）：[x1, x2, z1, z2]
 const ROOM_SOLID = [
   [-4.45, -2.55, -3.35, -0.85],   // 床
-  [1.05, 2.75, -3.15, -1.6],      // 书桌
-  [3.6, 4.5, 0.0, 1.15],          // 书架
-  [-4.25, -3.55, 2.25, 2.95],     // 落地灯
+  [-4.5, -3.95, -3.5, -2.95],     // 床头柜
+  [-4.55, -4.0, 0.85, 2.05],      // 衣柜
+  [-2.8, -1.9, 0.95, 1.3],        // 玩具箱
+  [-0.93, 0.63, -3.28, -1.72],    // 书桌（起居室窗前）
+  [-1.6, -0.4, -3.6, -3.1],       // 书架
+  [-1.78, -0.82, -1.32, 1.12],    // 沙发
+  [-1.05, -0.15, 0.95, 1.75],     // 小圆边桌
+  [-1.55, -1.0, 2.3, 2.95],       // 落地灯
+  [1.15, 1.85, 2.55, 3.15],       // 绿植
+  [1.62, 4.5, -3.62, -2.85],      // 厨房橱柜
+  [3.72, 4.58, 2.5, 3.32],        // 冰箱
+  [2.75, 3.85, -1.18, -0.02],     // 小圆桌
+  [-1.78, -1.62, -3.6, 0.9],      // 隔墙（卧室|起居室，门洞 z 0.9..2.0）
+  [-1.78, -1.62, 2.0, 3.6],
+  [1.42, 1.58, -3.6, -2.6],       // 隔墙（起居室|厨房，门洞 z -2.6..-1.5）
+  [1.42, 1.58, -1.5, 3.6],
+  [-4.6, 0.0, 3.42, 3.7],         // 前墙（门洞 x 0.0..1.1）
+  [1.1, 4.6, 3.42, 3.7],
 ];
 function resolveRoomClip(x, z, r) {
   for (const [x1, x2, z1, z2] of ROOM_SOLID) {
@@ -1608,56 +1625,194 @@ let roomExitDoor;
   const wallMat = mat(0xf7ecd8);
   const trimMat = mat(0xd8c6a8);
   roomGroup.add(mesh(box(9.2, 0.26, 7.2), floorMat, 0, -0.13, 0));
-  roomGroup.add(mesh(box(9.2, 3.1, 0.18), wallMat, 0, 1.55, -3.51));   // 后墙
-  roomGroup.add(mesh(box(0.18, 3.1, 7.2), wallMat, -4.51, 1.55, 0));    // 左墙
-  roomGroup.add(mesh(box(0.18, 3.1, 7.2), wallMat, 4.51, 1.55, 0));     // 右墙
-  roomGroup.add(mesh(box(8.7, 0.14, 0.05), trimMat, 0, 0.07, -3.4));    // 踢脚线
-  // 窗户（复用外景玻璃材质：夜晚自动透出暖光）
-  roomGroup.add(mesh(box(1.8, 1.3, 0.08), glassMat, -1.4, 1.75, -3.44));
-  roomGroup.add(mesh(box(2.0, 0.1, 0.12), mat(0xf0deaa), -1.4, 2.44, -3.42));
-  roomGroup.add(mesh(box(2.0, 0.1, 0.12), mat(0xf0deaa), -1.4, 1.06, -3.42));
-  roomGroup.add(mesh(box(0.1, 1.48, 0.12), mat(0xf0deaa), -2.34, 1.75, -3.42));
-  roomGroup.add(mesh(box(0.1, 1.48, 0.12), mat(0xf0deaa), -0.46, 1.75, -3.42));
-  roomGroup.add(mesh(box(0.06, 1.3, 0.1), mat(0xf0deaa), -1.4, 1.75, -3.42));
+  const wallSeg = (w, h, d, x, y, z) => roomGroup.add(mesh(box(w, h, d), wallMat, x, y, z));
+  // 后墙（两个窗洞：起居室 x -0.9..0.9、厨房 x 2.1..3.9，窗外是花园）
+  wallSeg(3.7, 3.1, 0.18, -2.75, 1.55, -3.51);
+  wallSeg(1.2, 3.1, 0.18, 1.5, 1.55, -3.51);
+  wallSeg(0.7, 3.1, 0.18, 4.25, 1.55, -3.51);
+  wallSeg(1.8, 0.7, 0.18, 0, 2.75, -3.51);
+  wallSeg(1.8, 1.1, 0.18, 0, 0.55, -3.51);
+  wallSeg(1.8, 0.7, 0.18, 3.0, 2.75, -3.51);
+  wallSeg(1.8, 1.1, 0.18, 3.0, 0.55, -3.51);
+  // 左墙（卧室窗洞 z -2.7..-0.9）
+  wallSeg(0.18, 3.1, 0.9, -4.51, 1.55, -3.15);
+  wallSeg(0.18, 3.1, 4.5, -4.51, 1.55, 1.35);
+  wallSeg(0.18, 0.7, 1.8, -4.51, 2.75, -1.8);
+  wallSeg(0.18, 1.1, 1.8, -4.51, 0.55, -1.8);
+  // 右墙
+  wallSeg(0.18, 3.1, 7.2, 4.51, 1.55, 0);
+  // 前墙（门口 x 0.0..1.1，门在起居室，点击门板离开）
+  wallSeg(4.1, 3.1, 0.18, -2.55, 1.55, 3.51);
+  wallSeg(3.5, 3.1, 0.18, 2.85, 1.55, 3.51);
+  wallSeg(1.1, 1.2, 0.18, 0.55, 2.5, 3.51);
+  // 两道隔墙：卧室 | 起居室 | 厨房（各留门洞）
+  wallSeg(0.16, 3.1, 4.5, -1.7, 1.55, -1.35);
+  wallSeg(0.16, 3.1, 1.6, -1.7, 1.55, 2.8);
+  wallSeg(0.16, 3.1, 1.0, 1.5, 1.55, -3.1);
+  wallSeg(0.16, 3.1, 5.1, 1.5, 1.55, 1.05);
+  // 天花板（封住原本从顶部看到的暗色岛底）
+  roomGroup.add(mesh(box(9.2, 0.14, 7.2), mat(0xefe0c8), 0, 3.12, 0));
+  // 窗框（三扇窗）
+  const winFrame = (x, z, alongX) => {
+    const L = 2.0, H = 1.48;
+    if (alongX) {
+      roomGroup.add(mesh(box(L, 0.1, 0.12), mat(0xf0deaa), x, 2.42, z));
+      roomGroup.add(mesh(box(L, 0.1, 0.12), mat(0xf0deaa), x, 1.08, z));
+      roomGroup.add(mesh(box(0.1, H, 0.12), mat(0xf0deaa), x - 0.95, 1.75, z));
+      roomGroup.add(mesh(box(0.1, H, 0.12), mat(0xf0deaa), x + 0.95, 1.75, z));
+      roomGroup.add(mesh(box(0.06, H, 0.1), mat(0xf0deaa), x, 1.75, z));
+      roomGroup.add(mesh(box(L, 0.06, 0.1), mat(0xf0deaa), x, 1.75, z));
+      roomGroup.add(mesh(box(L + 0.2, 0.07, 0.34), trimMat, x, 1.02, z + 0.14));   // 窗台
+    } else {
+      roomGroup.add(mesh(box(0.12, 0.1, L), mat(0xf0deaa), x, 2.42, z));
+      roomGroup.add(mesh(box(0.12, 0.1, L), mat(0xf0deaa), x, 1.08, z));
+      roomGroup.add(mesh(box(0.12, H, 0.1), mat(0xf0deaa), x, 1.75, z - 0.95));
+      roomGroup.add(mesh(box(0.12, H, 0.1), mat(0xf0deaa), x, 1.75, z + 0.95));
+      roomGroup.add(mesh(box(0.1, H, 0.06), mat(0xf0deaa), x, 1.75, z));
+      roomGroup.add(mesh(box(0.1, 0.06, L), mat(0xf0deaa), x, 1.75, z));
+      roomGroup.add(mesh(box(0.34, 0.07, L + 0.2), trimMat, x + 0.14, 1.02, z));
+    }
+  };
+  winFrame(0, -3.42, true);      // 起居室 → 后花园
+  winFrame(3.0, -3.42, true);    // 厨房 → 后花园
+  winFrame(-4.42, -1.8, false);  // 卧室 → 侧花园
+  // —— 窗外的花园（抬高 0.95 的草坪平台，透过窗户正好满眼绿色）——
+  const garden = new THREE.Group();
+  garden.position.y = 0.95;
+  roomGroup.add(garden);
+  garden.add(mesh(box(24, 1.2, 10), mat(0x8ec963), 0, 0.34, -9));        // 后花园草坪
+  garden.add(mesh(box(10, 1.2, 15), mat(0x8ec963), -12, 0.34, -0.5));    // 侧花园草坪
+  const gf1 = picketRun(20); gf1.position.set(0, 0, -13.4); garden.add(gf1);
+  const gf2 = picketRun(13); gf2.position.set(-16.6, 0, -0.5); gf2.rotation.y = Math.PI / 2; garden.add(gf2);
+  const flowerAt = (x, z, col) => {
+    garden.add(mesh(cyl(0.03, 0.035, 0.42, 6), mat(0x5faf58), x, 0.21, z));
+    garden.add(mesh(sph(0.09, 10), mat(col), x, 0.48, z));
+  };
+  [[-2.6, -7.4, 0xf26d6d], [-1.3, -8.0, 0xf7b733], [0.7, -7.4, 0xef8fb5], [2.0, -7.9, 0xfff6ea],
+   [3.7, -7.5, 0xb56cf0], [-6.5, -8.4, 0xf26d6d], [5.6, -8.6, 0xf7b733], [-3.8, -6.9, 0xef8fb5],
+   [-9.3, -2.6, 0xf26d6d], [-9.6, 0.3, 0xef8fb5], [-9.2, 2.1, 0xf7b733], [-10.6, -2.2, 0xb56cf0]]
+    .forEach(([x, z, c]) => flowerAt(x, z, c));
+  garden.add(mesh(cyl(0.14, 0.18, 1.5, 8), trunkMat, -6.2, 0.75, -10.4));
+  garden.add(mesh(sph(1.05, 14), mat(0x6dbb60), -6.2, 1.95, -10.4));
+  garden.add(mesh(cyl(0.1, 0.13, 1.2, 8), trunkMat, 6.0, 0.6, -10.6));
+  garden.add(mesh(sph(0.82, 12), mat(0x5aa84f), 6.0, 1.62, -10.6));
+  garden.add(mesh(sph(0.85, 12), mat(0x5cb050), -8.8, 0.5, -8.2));
+  garden.add(mesh(sph(0.7, 12), mat(0x5cb050), 7.8, 0.45, -8.2));
+  garden.add(mesh(cyl(0.12, 0.16, 1.3, 8), trunkMat, -12.4, 0.65, 2.4));
+  garden.add(mesh(sph(0.95, 14), mat(0x6dbb60), -12.4, 1.75, 2.4));
+  garden.add(mesh(box(0.5, 0.9, 11), mat(0x5faf58), -16.0, 0.45, -0.5));   // 侧花园绿篱
+  // 花园里的小蝴蝶（动画循环里扇翅膀）
+  for (let i = 0; i < 3; i++) {
+    const b = new THREE.Group();
+    const wm = mat([0xff9ecb, 0x9ed8ff, 0xffe28a][i], { side: THREE.DoubleSide });
+    const wl = mesh(new THREE.PlaneGeometry(0.2, 0.15), wm, -0.09, 0, 0);
+    const wr = mesh(new THREE.PlaneGeometry(0.2, 0.15), wm, 0.09, 0, 0);
+    b.add(wl); b.add(wr);
+    b.position.set([-2.2, 1.8, 0.8][i], 1.0, [-8.6, -9.4, -7.8][i]);
+    b.userData = { ph: Math.random() * 6, spd: 0.5 + Math.random() * 0.4, r: 0.9 + Math.random() * 0.8,
+      cx: [-2.2, 1.8, 0.8][i], cz: [-8.6, -9.4, -7.8][i], h: 1.0, wl, wr };
+    garden.add(b);
+    gardenButterflies.push(b);
+  }
   // 小床
   roomGroup.add(mesh(box(1.7, 0.34, 2.4), woodMat, -3.45, 0.17, -2.15));
   roomGroup.add(mesh(box(1.7, 0.5, 0.12), woodDark, -3.45, 0.55, -3.28));
   roomGroup.add(mesh(box(1.6, 0.18, 2.3), mat(0xe8f2f8), -3.45, 0.44, -2.15));
   roomGroup.add(mesh(box(1.3, 0.14, 0.5), mat(0xffffff), -3.45, 0.58, -2.9));
   roomGroup.add(mesh(box(1.62, 0.1, 1.3), mat(0xe8615a), -3.45, 0.56, -1.8));
+  // 床头柜 + 小台灯
+  roomGroup.add(mesh(box(0.5, 0.5, 0.5), woodMat, -4.2, 0.25, -3.2));
+  roomGroup.add(mesh(cyl(0.03, 0.05, 0.22, 8), woodDark, -4.2, 0.61, -3.2));
+  roomGroup.add(mesh(cyl(0.1, 0.14, 0.16, 10), mat(0xf2c66d), -4.2, 0.79, -3.2));
+  // 衣柜（对开门 + 把手）
+  roomGroup.add(mesh(box(0.55, 2.0, 1.15), woodMat, -4.28, 1.0, 1.45));
+  roomGroup.add(mesh(box(0.04, 1.7, 0.04), trimMat, -3.98, 1.0, 1.45));
+  roomGroup.add(mesh(sph(0.03, 8), mat(0xf0d896), -3.95, 1.05, 1.25));
+  roomGroup.add(mesh(sph(0.03, 8), mat(0xf0d896), -3.95, 1.05, 1.65));
+  // 玩具箱
+  roomGroup.add(mesh(box(0.8, 0.45, 0.5), mat(0x5fa8dc), -2.35, 0.23, 1.1));
+  roomGroup.add(mesh(box(0.82, 0.08, 0.52), woodMat, -2.35, 0.49, 1.1));
+  // 卧室窗两侧的窗帘
+  roomGroup.add(mesh(box(0.08, 1.6, 0.35), mat(0xf6c9d4), -4.35, 1.7, -2.88));
+  roomGroup.add(mesh(box(0.08, 1.6, 0.35), mat(0xf6c9d4), -4.35, 1.7, -0.72));
   // 圆地毯
   const rug = mesh(new THREE.CircleGeometry(1.55, 30), mat(0xf2b8c6), 0.3, 0.016, 0.3);
   rug.rotation.x = -Math.PI / 2; rug.castShadow = false;
   roomGroup.add(rug);
-  // 书桌 + 椅子
-  roomGroup.add(mesh(cyl(0.72, 0.78, 0.08, 18), woodMat, 1.9, 0.76, -2.5));
-  roomGroup.add(mesh(cyl(0.08, 0.11, 0.72, 10), woodDark, 1.9, 0.36, -2.5));
-  roomGroup.add(mesh(box(0.52, 0.06, 0.52), woodMat, 1.9, 0.45, -1.3));
+  // 书桌 + 椅子（起居室窗前，桌上放着书和茶杯）
+  roomGroup.add(mesh(cyl(0.72, 0.78, 0.08, 18), woodMat, -0.15, 0.76, -2.5));
+  roomGroup.add(mesh(cyl(0.08, 0.11, 0.72, 10), woodDark, -0.15, 0.36, -2.5));
+  roomGroup.add(mesh(box(0.52, 0.06, 0.52), woodMat, -0.15, 0.45, -1.3));
   for (const [cx, cz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]])
-    roomGroup.add(mesh(cyl(0.03, 0.04, 0.42, 8), woodDark, 1.9 + cx, 0.21, -1.3 + cz));
-  roomGroup.add(mesh(box(0.52, 0.62, 0.06), woodMat, 1.9, 0.78, -1.02));
-  // 书架 + 彩色小书
-  roomGroup.add(mesh(box(0.34, 2.05, 1.1), woodMat, 4.28, 1.03, 0.5));
+    roomGroup.add(mesh(cyl(0.03, 0.04, 0.42, 8), woodDark, -0.15 + cx, 0.21, -1.3 + cz));
+  roomGroup.add(mesh(box(0.52, 0.62, 0.06), woodMat, -0.15, 0.78, -1.02));
+  roomGroup.add(mesh(box(0.3, 0.05, 0.22), mat(0x5fa8dc), -0.35, 0.83, -2.55));
+  roomGroup.add(mesh(cyl(0.05, 0.04, 0.1, 10), mat(0xffffff), 0.05, 0.85, -2.4));
+  // 书架（贴起居室后墙，彩色小书）
+  roomGroup.add(mesh(box(1.15, 2.05, 0.34), woodMat, -1.0, 1.03, -3.4));
   const bookCols = [0xe8615a, 0x5fa8dc, 0xf2c14e, 0x7cc45f, 0xc792ff];
   for (let i = 0; i < 8; i++)
-    roomGroup.add(mesh(box(0.2, 0.32, 0.07), mat(bookCols[i % 5]), 4.14, 1.3 + (i % 2) * 0.58, 0.1 + (i >> 1) * 0.26));
-  // 落地灯（暖光点光源）
+    roomGroup.add(mesh(box(0.24, 0.32, 0.07), mat(bookCols[i % 5]), -1.38 + (i % 4) * 0.3, 1.32 + (i >> 2) * 0.58, -3.2));
+  // 小沙发（靠着隔墙，抱枕两枚）
+  roomGroup.add(mesh(box(0.85, 0.42, 2.0), mat(0xf2a9b8), -1.3, 0.21, -0.1));
+  roomGroup.add(mesh(box(0.22, 0.62, 2.0), mat(0xf2a9b8), -1.56, 0.72, -0.1));
+  roomGroup.add(mesh(box(0.85, 0.62, 0.22), mat(0xf2a9b8), -1.3, 0.5, -1.21));
+  roomGroup.add(mesh(box(0.85, 0.62, 0.22), mat(0xf2a9b8), -1.3, 0.5, 1.01));
+  roomGroup.add(mesh(box(0.7, 0.14, 0.88), mat(0xffd9e0), -1.28, 0.49, -0.55));
+  roomGroup.add(mesh(box(0.7, 0.14, 0.88), mat(0xffd9e0), -1.28, 0.49, 0.35));
+  // 小圆边桌 + 小茶壶（沙发旁）
+  roomGroup.add(mesh(cyl(0.4, 0.44, 0.06, 16), woodMat, -0.6, 0.42, 1.35));
+  roomGroup.add(mesh(cyl(0.06, 0.08, 0.4, 10), woodDark, -0.6, 0.2, 1.35));
+  roomGroup.add(mesh(sph(0.1, 12), mat(0xffffff), -0.6, 0.53, 1.3));
+  roomGroup.add(mesh(cyl(0.02, 0.03, 0.11, 8), mat(0xffffff), -0.47, 0.55, 1.28));
+  // 吊灯（起居室中央）
+  roomGroup.add(mesh(cyl(0.015, 0.015, 0.55, 6), mat(0x6b5a48), 0.3, 2.85, 0.2));
+  roomGroup.add(mesh(cyl(0.3, 0.16, 0.26, 12), mat(0xf2c66d, { side: THREE.DoubleSide }), 0.3, 2.5, 0.2));
+  roomGroup.add(mesh(sph(0.07, 10), mat(0xfff2cf, { emissive: 0xffe9b0, emissiveIntensity: 0.9 }), 0.3, 2.42, 0.2));
+  // 绿植 + 挂钟（前墙）
+  roomGroup.add(mesh(cyl(0.13, 0.1, 0.26, 10), mat(0xd9784f), 1.5, 0.13, 2.85));
+  roomGroup.add(mesh(sph(0.28, 12), mat(0x5cb050), 1.5, 0.45, 2.85));
+  roomGroup.add(mesh(sph(0.2, 10), mat(0x6dbb60), 1.32, 0.6, 2.7));
+  const clockFace = mesh(cyl(0.26, 0.26, 0.05, 24), mat(0xfff6ea), 0.55, 2.2, 3.4);
+  clockFace.rotation.x = Math.PI / 2;
+  roomGroup.add(clockFace);
+  roomGroup.add(mesh(box(0.04, 0.18, 0.02), mat(0x35241c), 0.55, 2.26, 3.36));
+  // 落地灯（卧室角落暖光）
   roomGroup.add(mesh(cyl(0.16, 0.2, 0.06, 12), woodDark, -3.9, 0.03, 2.6));
   roomGroup.add(mesh(cyl(0.045, 0.045, 1.5, 8), woodDark, -3.9, 0.78, 2.6));
   roomGroup.add(mesh(cyl(0.2, 0.34, 0.42, 12), mat(0xf2c66d, { side: THREE.DoubleSide }), -3.9, 1.68, 2.6));
   const roomLamp = new THREE.PointLight(0xffd9a0, 14, 12, 1.7);
   roomLamp.position.set(-3.9, 1.95, 2.6);
   roomGroup.add(roomLamp);
-  const roomFill = new THREE.PointLight(0xfff2e0, 8, 15, 1.8);
-  roomFill.position.set(0.4, 2.7, 0.2);
+  const roomFill = new THREE.PointLight(0xfff2e0, 11, 16, 1.8);
+  roomFill.position.set(0.3, 2.5, 0.2);
   roomGroup.add(roomFill);
-  // 墙上的小画
-  roomGroup.add(mesh(box(0.06, 0.72, 0.95), mat(0xd8b26a), -4.4, 1.85, -0.9));
-  roomGroup.add(mesh(box(0.02, 0.52, 0.75), mat(0xa8d8f0), -4.36, 1.85, -0.9));
-  // 出口的门（右墙，点击离开）
-  roomExitDoor = mesh(box(0.1, 1.9, 1.0), mat(0xa06a42), 4.43, 0.95, 2.45);
+  // 墙上的小画（卧室左墙）
+  roomGroup.add(mesh(box(0.06, 0.72, 0.95), mat(0xd8b26a), -4.4, 1.85, -0.1));
+  roomGroup.add(mesh(box(0.02, 0.52, 0.75), mat(0xa8d8f0), -4.36, 1.85, -0.1));
+  // 厨房：橱柜 + 水槽 + 吊柜 + 罐子（后窗外的花园尽收眼底）
+  roomGroup.add(mesh(box(2.7, 0.8, 0.6), mat(0xf0e6d0), 3.05, 0.4, -3.25));
+  roomGroup.add(mesh(box(2.8, 0.06, 0.68), woodMat, 3.05, 0.83, -3.25));
+  roomGroup.add(mesh(box(0.7, 0.1, 0.45), mat(0xbfd8e0), 3.4, 0.82, -3.25));
+  roomGroup.add(mesh(box(0.3, 0.5, 0.04), trimMat, 2.2, 0.62, -2.94));
+  roomGroup.add(mesh(box(0.3, 0.5, 0.04), trimMat, 3.6, 0.62, -2.94));
+  roomGroup.add(mesh(box(2.2, 0.7, 0.4), mat(0xf0e6d0), 3.1, 2.35, -3.32));
+  for (let i = 0; i < 3; i++)
+    roomGroup.add(mesh(cyl(0.09, 0.11, 0.24, 10), mat([0xd9784f, 0x5fa8dc, 0xf2c14e][i]), 2.45 + i * 0.6, 0.98, -3.2));
+  roomGroup.add(mesh(cyl(0.09, 0.07, 0.14, 8), mat(0xd9784f), 2.4, 0.91, -3.15));
+  roomGroup.add(mesh(sph(0.14, 10), mat(0x5cb050), 2.4, 1.05, -3.15));
+  // 小圆桌 + 两只凳子
+  roomGroup.add(mesh(cyl(0.45, 0.5, 0.06, 16), woodMat, 3.3, 0.5, -0.6));
+  roomGroup.add(mesh(cyl(0.06, 0.09, 0.47, 8), woodDark, 3.3, 0.24, -0.6));
+  roomGroup.add(mesh(cyl(0.18, 0.2, 0.3, 10), woodMat, 2.35, 0.15, -0.95));
+  roomGroup.add(mesh(cyl(0.18, 0.2, 0.3, 10), woodMat, 4.0, 0.15, -0.4));
+  // 冰箱
+  roomGroup.add(mesh(box(0.75, 1.9, 0.7), mat(0xf4f7f5), 4.15, 0.95, 2.9));
+  roomGroup.add(mesh(box(0.04, 0.5, 0.05), trimMat, 3.76, 1.25, 2.7));
+  // 出口的门（前墙门洞里，点击离开）
+  roomExitDoor = mesh(box(1.0, 1.9, 0.1), mat(0xa06a42), 0.55, 0.95, 3.55);
   roomGroup.add(roomExitDoor);
-  roomGroup.add(mesh(sph(0.04, 8), mat(0xf0d896), 4.36, 0.95, 2.78));
+  roomGroup.add(mesh(sph(0.04, 8), mat(0xf0d896), 0.88, 0.95, 3.46));
 }
 function enterInterior() {
   if (interiorMode) return;
@@ -1666,9 +1821,9 @@ function enterInterior() {
   interiorCam.pos.copy(camera.position);
   interiorCam.target.copy(controls.target);
   camera.rotation.order = 'YXZ';
-  camera.position.set(2.75, roomGroup.position.y + 1.45, 2.95);
-  interiorCam.yaw = Math.atan2(2.75 - 0.2, 2.95 - (-0.6));
-  interiorCam.pitch = -0.06;
+  camera.position.set(0.5, roomGroup.position.y + 1.45, 2.55);
+  interiorCam.yaw = Math.atan2(0.5 - 0.1, 2.55 - (-2.2));
+  interiorCam.pitch = -0.05;
   ihint.style.display = '';
   btnExit.style.display = '';
   hint.style.display = 'none';
@@ -1691,20 +1846,35 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { roomKeys[e.key.toLowerCase()] = false; });
 
-/* ---------- 小女孩在屋里的随机小动作 ---------- */
-const iGirl = { state: 'walk', tx: 0.3, tz: 0.2, act: null, until: 0, blend: 0, phase: 0,
+/* ---------- 小女孩在屋里的随机小动作（卧室 / 起居室 / 厨房三个房间） ---------- */
+const iGirl = { state: 'walk', path: [], act: null, until: 0, blend: 0, phase: 0,
   fromPos: new THREE.Vector3(), fromRotY: 0, seatPos: new THREE.Vector3(), seatRotY: 0 };
 const ROOM_SPOTS = [
-  { x: -1.4, z: -2.5, act: 'window', px: -1.4, py: 0, pz: -2.55, ry: Math.PI },          // 窗前看外面
-  { x: 1.9, z: -1.05, act: 'chair', px: 1.9, py: -0.03, pz: -1.32, ry: Math.PI },        // 坐到书桌前
-  { x: -3.0, z: -0.55, act: 'bed', px: -3.1, py: 0.0, pz: -0.72, ry: 0 },                // 坐床沿
-  { x: 3.25, z: 0.5, act: 'shelf', px: 3.42, py: 0, pz: 0.5, ry: Math.PI / 2 },          // 靠近书架
+  { x: -1.45, z: -2.4, act: 'window', px: -1.45, py: 0, pz: -2.55, ry: Math.PI },    // 起居室窗前看花园
+  { x: -0.15, z: -1.0, act: 'chair', px: -0.15, py: -0.03, pz: -1.32, ry: Math.PI }, // 坐到书桌前
+  { x: -3.0, z: -0.5, act: 'bed', px: -3.1, py: 0.0, pz: -0.72, ry: 0 },             // 坐床沿
+  { x: 2.6, z: -2.1, act: 'counter', px: 2.6, py: 0, pz: -2.62, ry: Math.PI },       // 厨房台前忙活
+  { x: -1.5, z: -2.75, act: 'shelf', px: -1.5, py: 0, pz: -2.9, ry: Math.PI },       // 书架前挑书
 ];
+// 三个房间的跨房间路径：先走到门洞两侧，再进目标房间
+function roomOf(x) { return x < -1.7 ? 0 : (x > 1.5 ? 2 : 1); }
+function routeTo(fx, fz, tx, tz) {
+  const rf = roomOf(fx), rt = roomOf(tx);
+  const dA = [-2.0, 1.45], dB = [-1.4, 1.45];     // 卧室门洞两侧（正对门洞 z 1.45）
+  const dC = [1.1, -2.05], dD = [1.75, -2.05];    // 厨房门洞两侧（正对门洞 z -2.05）
+  const p = [];
+  if (rf !== rt) {
+    if (rf === 0) { p.push(dA, dB); if (rt === 2) p.push(dC, dD); }
+    else if (rf === 2) { p.push(dD, dC); if (rt === 0) p.push(dB, dA); }
+    else if (rt === 0) { p.push(dB, dA); }
+    else { p.push(dC, dD); }
+  }
+  p.push([tx, tz]);
+  return p;
+}
 function updateInteriorGirl(delta, t, holdUmb) {
   if (iGirl.state === 'walk') {
-    const dx = iGirl.tx - girl.position.x, dz = iGirl.tz - girl.position.z;
-    const d = Math.hypot(dx, dz);
-    if (d < 0.16) {   // 到位 → 开始小动作
+    if (!iGirl.path.length) {   // 到位 → 开始小动作
       const sp = ROOM_SPOTS.find(sp => sp.act === iGirl.act) || ROOM_SPOTS[0];
       iGirl.fromPos.copy(girl.position);
       iGirl.fromRotY = girl.rotation.y;
@@ -1715,10 +1885,19 @@ function updateInteriorGirl(delta, t, holdUmb) {
       iGirl.state = 'act';
       return;
     }
+    const [wx, wz] = iGirl.path[0];
+    const dx = wx - girl.position.x, dz = wz - girl.position.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.16) { iGirl.path.shift(); return; }
     const st = Math.min(0.62 * delta, d);
-    girl.position.x += dx / d * st;
-    girl.position.z += dz / d * st;
-    [girl.position.x, girl.position.z] = resolveRoomClip(girl.position.x, girl.position.z, 0.26);
+    // x / z 分轴移动：对角线被家具挡住时自动沿空闲轴滑行，不会卡在拐角
+    let nx = girl.position.x + (dx / d) * st;
+    let nz = girl.position.z;
+    [nx, nz] = resolveRoomClip(nx, nz, 0.24);
+    let nz2 = girl.position.z + (dz / d) * st;
+    [nx, nz2] = resolveRoomClip(nx, nz2, 0.24);
+    girl.position.x = nx;
+    girl.position.z = nz2;
     girl.rotation.y = lerpAngle(girl.rotation.y, Math.atan2(dx, dz), Math.min(1, delta * 7));
     iGirl.phase += delta * 6.8;
     const sw = Math.sin(iGirl.phase);
@@ -1738,7 +1917,7 @@ function updateInteriorGirl(delta, t, holdUmb) {
       if (!holdUmb) armR.rotation.x = -0.5 * b;
       head.rotation.y = Math.sin(t * 0.5) * 0.15 * b;
       head.rotation.x = 0.03;
-    } else {                                             // 窗前 / 书架前：站着张望
+    } else {                                             // 窗前 / 厨房台前 / 书架前：站着张望
       legL.rotation.x = legR.rotation.x = 0;
       armL.rotation.x = -0.1 * b;
       if (!holdUmb) armR.rotation.x = -0.1 * b;
@@ -1746,10 +1925,11 @@ function updateInteriorGirl(delta, t, holdUmb) {
       head.rotation.y = Math.sin(t * 0.45) * 0.18 * b;
     }
     girl.position.y += Math.abs(Math.sin(t * 2)) * 0.006;
-    if (t > iGirl.until && iGirl.blend >= 1) {           // 换下一个活动
+    if (t > iGirl.until && iGirl.blend >= 1) {           // 换下一个活动（可跨房间）
       const others = ROOM_SPOTS.filter(sp => sp.act !== iGirl.act);
       const sp = others[(Math.random() * others.length) | 0];
-      iGirl.tx = sp.x; iGirl.tz = sp.z; iGirl.act = sp.act;
+      iGirl.act = sp.act;
+      iGirl.path = routeTo(girl.position.x, girl.position.z, sp.x, sp.z);
       iGirl.state = 'walk';
       girl.position.y = 0;
       legL.rotation.z = legR.rotation.z = 0;
@@ -2492,12 +2672,13 @@ function animate() {
     if (!holdUmb) armR.rotation.x = step * 0.6;
     if (walk.blend >= 1) {
       if (walk.state === 'enter') {
-        roomGroup.add(girl);                              // 进屋：切到室内场景
-        girl.position.set(3.55, 0, 2.25);
-        girl.rotation.set(0, Math.atan2(-3.55, -2.25), 0);
+        roomGroup.add(girl);                              // 进屋：从起居室前门进来
+        girl.position.set(0.55, 0, 2.85);
+        girl.rotation.set(0, Math.PI, 0);
         girl.visible = true;
         iGirl.state = 'walk';
-        iGirl.tx = 0.3; iGirl.tz = 0.2; iGirl.act = null;
+        iGirl.path = routeTo(0.55, 2.85, 0.3, 0.2);
+        iGirl.act = null;
         walk.state = 'inside';
       } else {
         walk.state = 'idle';
@@ -2868,6 +3049,16 @@ function animate() {
     }
   }
 
+  // 花园小蝴蝶（窗外）
+  for (const gb of gardenButterflies) {
+    const u = gb.userData;
+    const a = t * u.spd + u.ph;
+    gb.position.set(u.cx + Math.cos(a) * u.r, u.h + Math.sin(a * 2.3) * 0.15, u.cz + Math.sin(a) * u.r * 0.7);
+    gb.rotation.y = -a;
+    const gbf = Math.sin(t * 13 + u.ph) * 0.85;
+    u.wl.rotation.y = gbf; u.wr.rotation.y = -gbf;
+  }
+
   if (interiorMode) {
     // 室内漫游：WASD/方向键 在房间里走动
     const mv = new THREE.Vector3();
@@ -2907,9 +3098,12 @@ window.__yard = () => ({ env, envTarget, timeAuto, umbrellaOpen, wx: weather.kin
   girlScr: __scr(girl.position.clone().setY(0.8)), catScr: __scr(cat.position.clone().setY(0.3)), bunnyScr: __scr(bunny.position.clone().setY(0.15)),
   houseScr: __scr(house.position.clone().setY(1.2)), doorScr: __scr(roomExitDoor.getWorldPosition(new THREE.Vector3())),
   imode: interiorMode, cam: camera.position.toArray().map(v => +v.toFixed(2)),
-  catY: +cat.position.y.toFixed(3), bunnyMode: bunnyState.mode, catExcited: clock.elapsedTime < catExcitedUntil });
+  catY: +cat.position.y.toFixed(3), bunnyMode: bunnyState.mode, catExcited: clock.elapsedTime < catExcitedUntil,
+  istate: iGirl.state, iact: iGirl.act, iblend: +iGirl.blend.toFixed(2), iuntil: +(iGirl.until - clock.elapsedTime).toFixed(1) });
 window.__yardEnter = () => enterInterior();
 window.__yardExit = () => exitInterior();
+window.__yardCam = (x, z, yaw) => { camera.position.set(x, roomGroup.position.y + 1.45, z); if (yaw != null) interiorCam.yaw = yaw; };   // 调试：室内相机传送
+window.__room = roomGroup;   // 调试：室内场景组
 window.__yardGoto = kind => {
   const s = SPOTS.find(sp => sp.kind === kind);
   if (!s) return false;

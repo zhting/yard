@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>小院时光 · A Little Courtyard</title>
+<meta name="description" content="纯前端 Three.js 微缩小院：昼夜天气、雨雪萤火虫，点房子进屋逛三室，小女孩在院子里散步荡秋千。">
+<meta property="og:title" content="小院时光 · A Little Courtyard">
+<meta property="og:description" content="一个可逛的 3D 微缩小院：真实时区天气、昼夜切换，点房子进屋，和小女孩一起看鱼荡秋千。">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23ffe3c2'/%3E%3Cpath d='M6 20 L16 10 L26 20 Z' fill='%23c96f4a'/%3E%3Crect x='11' y='18' width='10' height='8' fill='%23e8b07a'/%3E%3Ccircle cx='24' cy='9' r='3' fill='%23ffb36b'/%3E%3C/svg%3E">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #ffe9d2;
@@ -78,12 +83,77 @@
   @keyframes pulse { 50% { transform: scale(1.15); } }
   #loading.hide { opacity: 0; pointer-events: none; }
 
+  #ihint.hide {
+    opacity: 0; transition: opacity .45s ease;
+  }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%) translateY(8px);
+    z-index: 14; max-width: min(88vw, 360px); pointer-events: none;
+    color: #7a5a3a; font-size: 13px; letter-spacing: 1px; text-align: center;
+    background: rgba(255,255,255,.72); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,.75); border-radius: 999px;
+    padding: 10px 18px; box-shadow: 0 8px 24px rgba(160,110,60,.16);
+    opacity: 0; transition: opacity .28s ease, transform .28s ease;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  #statusCard {
+    position: fixed; top: 118px; left: 30px; z-index: 11;
+    max-width: min(46vw, 280px); color: #7a5a3a;
+    background: rgba(255,255,255,.55); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,.7); border-radius: 16px;
+    padding: 10px 34px 10px 14px; box-shadow: 0 6px 20px rgba(160,110,60,.14);
+    font-size: 12px; letter-spacing: 1px; line-height: 1.55;
+    transition: opacity .4s ease, transform .4s ease;
+  }
+  #statusCard.hide { opacity: 0; pointer-events: none; transform: translateY(-6px); }
+  #statusCard .sc-label { opacity: .55; font-size: 11px; margin-bottom: 2px; }
+  #statusCard .sc-text { user-select: none; }
+  #statusCard .sc-x {
+    position: absolute; top: 6px; right: 8px; border: none; cursor: pointer;
+    background: transparent; color: #7a5a3a; opacity: .55; font-size: 14px;
+    line-height: 1; padding: 4px 6px; font-family: inherit;
+  }
+  #statusCard .sc-x:hover { opacity: 1; }
+
+  #vpad {
+    position: fixed; left: 18px; bottom: 96px; width: 118px; height: 118px;
+    z-index: 12; display: none; pointer-events: none; touch-action: none;
+  }
+  #vpad.on { display: block; }
+  #vpad .base {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: rgba(255,255,255,.32); border: 2px solid rgba(122,90,58,.32);
+    box-shadow: 0 6px 18px rgba(160,110,60,.16);
+  }
+  #vpad .knob {
+    position: absolute; width: 46px; height: 46px; border-radius: 50%;
+    left: 50%; top: 50%; transform: translate(-50%, -50%);
+    background: rgba(201,111,74,.78); border: 2px solid rgba(255,255,255,.55);
+    box-shadow: 0 2px 10px rgba(160,80,40,.28);
+    transition: none;
+  }
+  #lookZone {
+    position: fixed; right: 18px; bottom: 110px; z-index: 12;
+    display: none; pointer-events: none; user-select: none;
+    color: #7a5a3a; font-size: 11px; letter-spacing: 1px;
+    background: rgba(255,255,255,.4); backdrop-filter: blur(8px);
+    padding: 6px 12px; border-radius: 999px; opacity: .85;
+  }
+  #lookZone.on { display: block; }
+
   @media (max-width: 640px) {
     #title h1 { font-size: 20px; letter-spacing: 3px; }
     #hint { display: none; }
     #panel button { padding: 8px 14px; font-size: 12px; }
     #clock { top: 58px; left: 16px; font-size: 12px; }
     #panel select { padding: 8px 12px; font-size: 12px; }
+    #ihint { top: 24px; max-width: 92vw; white-space: normal; text-align: center; line-height: 1.45; }
+    #vpad { left: 12px; bottom: 88px; width: 108px; height: 108px; }
+    #vpad .knob { width: 42px; height: 42px; }
+    #toast { bottom: 96px; font-size: 12px; }
+    #statusCard { top: 98px; left: 16px; max-width: min(78vw, 260px); }
   }
 </style>
 </head>
@@ -94,16 +164,27 @@
   <h1>小院时光</h1>
   <p>A LITTLE COURTYARD · 3D DIORAMA</p>
 </div>
-<div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩 / 小猫 / 小兔 · 点房子进屋</div>
+<div id="hint">🖱 拖拽旋转 · 滚轮缩放 · 右键平移 · 点一点小女孩 / 小猫 / 小兔 / 向日葵 / 灯笼 / 锦鲤 · 点房子进屋</div>
 <div id="ihint" style="display:none">🏠 WASD / 方向键 走动 · 按住拖拽 环视 · 点门离开 · ESC 或点「回到院子」</div>
 <div id="clock"><span id="clockTime">北京 --:--</span><span class="temp" id="clockWx"></span><span class="temp" id="clockTemp"></span></div>
+<div id="statusCard" class="hide" aria-live="polite">
+  <button type="button" class="sc-x" id="statusDismiss" aria-label="关闭">×</button>
+  <div class="sc-label">小院絮语</div>
+  <div class="sc-text" id="statusText"></div>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
 <div id="panel">
   <select id="citySelect" aria-label="城市"></select>
+  <button id="btnQuality" aria-label="画质">画质 高</button>
+  <button id="btnAudio" aria-label="环境音">环境音 关</button>
   <button id="btnDay">🌙 夜晚</button>
   <button id="btnRotate">🔄 自动旋转</button>
+  <button id="btnPhoto" aria-label="今日拍照">📷 今日拍照</button>
   <button id="btnExit" style="display:none">🚪 回到院子</button>
 </div>
 <div id="loading"><div class="sun"></div><div>正在准备小院子…</div></div>
+<div id="vpad" aria-hidden="true"><div class="base"></div><div class="knob" id="vpadKnob"></div></div>
+<div id="lookZone">右半屏 · 环视</div>
 
 <script type="importmap">
 {
@@ -115,6 +196,7 @@
 </script>
 
 <script type="module">
+// Three.js 经上方 import map 从 jsDelivr CDN 加载（需联网；未内联 vendor 以保持单文件轻量）
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -158,6 +240,68 @@ controls.addEventListener('start', () => {
 });
 
 /* ============================================================
+   画质档（高/低）· localStorage: yard-quality
+============================================================ */
+const QUALITY_KEY = 'yard-quality';
+const fluffTargets = [];
+function detectDefaultQuality() {
+  try {
+    const saved = localStorage.getItem(QUALITY_KEY);
+    if (saved === 'low' || saved === 'high') return saved;
+  } catch (_) {}
+  let coarse = false, lowMem = false;
+  try { coarse = matchMedia('(pointer: coarse)').matches; } catch (_) {}
+  try { if (navigator.deviceMemory != null && navigator.deviceMemory <= 4) lowMem = true; } catch (_) {}
+  if (devicePixelRatio <= 1 || coarse || lowMem) return 'low';
+  return 'high';
+}
+let quality = detectDefaultQuality();
+
+function gateFluffShells(target) {
+  const shells = target.userData.fluffShells;
+  if (!shells || !shells.length) return;
+  const keep = quality === 'low' ? Math.max(1, Math.ceil(shells.length * 0.5)) : shells.length;
+  for (let i = 0; i < shells.length; i++) shells[i].visible = i < keep;
+}
+
+function applyShadowQuality() {
+  const size = quality === 'low' ? 1024 : 4096;
+  if (sun.shadow.mapSize.x === size && sun.shadow.mapSize.y === size) return;
+  sun.shadow.mapSize.set(size, size);
+  if (sun.shadow.map) {
+    sun.shadow.map.dispose();
+    sun.shadow.map = null;
+  }
+}
+
+let particlesReady = false;
+function applyParticleQuality() {
+  if (!particlesReady) return;
+  rainLive = quality === 'low' ? (RAIN_N >> 1) : RAIN_N;
+  snowLive = quality === 'low' ? (SNOW_N >> 1) : SNOW_N;
+  rainGeo.setDrawRange(0, rainLive * 2);
+  snowPoints.geometry.setDrawRange(0, snowLive);
+}
+
+function syncQualityButton() {
+  const btn = document.getElementById('btnQuality');
+  if (!btn) return;
+  btn.textContent = quality === 'high' ? '画质 高' : '画质 低';
+  btn.classList.toggle('active', quality === 'high');
+}
+
+function applyQuality(q, persist = true) {
+  quality = (q === 'low') ? 'low' : 'high';
+  if (persist) {
+    try { localStorage.setItem(QUALITY_KEY, quality); } catch (_) {}
+  }
+  applyShadowQuality();
+  applyParticleQuality();
+  for (const t of fluffTargets) gateFluffShells(t);
+  syncQualityButton();
+}
+
+/* ============================================================
    光照（暖调、柔和）
 ============================================================ */
 const hemi = new THREE.HemisphereLight(0xfff0d8, 0x9cb97a, 1.0);
@@ -169,7 +313,7 @@ scene.add(ambient);
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.9);
 sun.position.set(26, 34, 16);
 sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.mapSize.set(quality === 'low' ? 1024 : 4096, quality === 'low' ? 1024 : 4096);
 sun.shadow.camera.left = -21; sun.shadow.camera.right = 21;
 sun.shadow.camera.top = 21;   sun.shadow.camera.bottom = -21;
 sun.shadow.camera.near = 1;   sun.shadow.camera.far = 120;
@@ -282,6 +426,7 @@ const FUR_TEX = makeFurTex();
 function fluffify(target, opts = {}) {
   const { layers = 6, growth = 0.075, tint = 0 } = opts;
   const baseCol = target.material.color;
+  const shells = [];
   for (let k = 1; k <= layers; k++) {
     const sm = new THREE.MeshToonMaterial({
       color: baseCol.clone().lerp(new THREE.Color(0xffffff), tint * (k / layers)),
@@ -293,7 +438,11 @@ function fluffify(target, opts = {}) {
     sh.scale.setScalar(1 + growth * k);
     sh.castShadow = false;
     target.add(sh);
+    shells.push(sh);
   }
+  target.userData.fluffShells = shells;
+  fluffTargets.push(target);
+  gateFluffShells(target);
 }
 
 function mesh(geo, material, x = 0, y = 0, z = 0) {
@@ -476,11 +625,14 @@ function makeFallingPoints(count, color, size) {
   scene.add(pts);
   return pts;
 }
-const snowPoints = makeFallingPoints(800, 0xffffff, 0.42);
+const SNOW_N = 800;
+const snowPoints = makeFallingPoints(SNOW_N, 0xffffff, 0.42);
 snowPoints.material.opacity = 0.95;
 snowPoints.material.sizeAttenuation = true;
+let snowLive = quality === 'low' ? (SNOW_N >> 1) : SNOW_N;
 
 const RAIN_N = 1000;
+let rainLive = quality === 'low' ? (RAIN_N >> 1) : RAIN_N;
 const rainLen = new Float32Array(RAIN_N);
 const rainSpd = new Float32Array(RAIN_N);
 const rainPos = new Float32Array(RAIN_N * 6);
@@ -508,6 +660,8 @@ rainLines.visible = false;
 rainLines.frustumCulled = false;
 scene.add(rainLines);
 const rainPoints = rainLines;
+particlesReady = true;
+applyParticleQuality();
 
 scene.fog = new THREE.FogExp2(0xc8d2e0, 0.00001);
 
@@ -611,6 +765,7 @@ for (let i = 0; i < 7; i++) {
 // 门柱 + 灯笼（夜晚点亮）
 const lanternMats = [];
 const lanternLights = [];
+const lanternMeshes = [];
 for (const side of [-1, 1]) {
   diorama.add(mesh(box(0.22, 1.7, 0.22), woodDark, side * 1.7, 0.85, 10));
   diorama.add(mesh(box(0.34, 0.1, 0.34), mat(0x5c4030), side * 1.7, 1.75, 10));
@@ -618,6 +773,9 @@ for (const side of [-1, 1]) {
   const lm = new THREE.MeshToonMaterial({ color: 0xffe6b0, gradientMap: GRAD, emissive: 0xffb14e, emissiveIntensity: 0 });
   lanternMats.push(lm);
   const lantern = mesh(box(0.17, 0.26, 0.17), lm, side * 1.25, 1.44, 10);
+  lantern.userData.yardKind = 'lantern';
+  lantern.userData.baseScale = 1;
+  lanternMeshes.push(lantern);
   diorama.add(lantern);
   const lg = new THREE.Sprite(new THREE.SpriteMaterial({
     map: smokeTex, color: 0xffb45e, transparent: true, opacity: 0,
@@ -1011,9 +1169,12 @@ function tulip(x, z, color, s = 1) {
   g.add(mesh(new THREE.ConeGeometry(0.11 * s, 0.22 * s, 8), mat(color), 0, 0.46 * s, 0));
   diorama.add(g);
 }
+const sunflowerGroups = [];
 function sunflower(x, z, s = 1) {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
+  g.userData.yardKind = 'sunflower';
+  g.userData.baseScale = 1;
   g.add(mesh(cyl(0.035 * s, 0.05 * s, 1.1 * s, 6), stemMat, 0, 0.55 * s, 0));
   // 花头独立转轴：白天朝向太阳，夜晚垂头
   const head = new THREE.Group();
@@ -1034,6 +1195,7 @@ function sunflower(x, z, s = 1) {
     droop: new THREE.Vector3(Math.random() - 0.5, -1.6, Math.random() - 0.5).normalize()
   };
   sunflowerHeads.push(head);
+  sunflowerGroups.push(g);
 }
 function makeDaisyOn(parent, x, z, color, s = 1) {
   const g = new THREE.Group();
@@ -1197,6 +1359,8 @@ for (let i = 0; i < 3; i++) {
   kt.scale.set(1.6, 0.5, 1);
   kt.castShadow = false;
   fg.add(kt);
+  fg.userData.yardKind = 'koi';
+  fg.userData.baseScale = 1;
   kois.push({ g: fg, tail: kt, phase: i * 2.1, spd: 0.32 + i * 0.07, r: 1.15 + i * 0.16, squash: 0.7 });
   fg.position.y = 0.05;
   pond.add(fg);
@@ -1827,6 +1991,24 @@ let roomExitDoor, doorExitHit;
   // 冰箱
   roomGroup.add(mesh(box(0.75, 1.9, 0.7), mat(0xf4f7f5), 4.02, 0.95, 2.8));
   roomGroup.add(mesh(box(0.04, 0.5, 0.05), trimMat, 3.63, 1.25, 2.6));
+  // 可点家具：透明点击体（床 / 书桌 / 书架 / 厨房台），不挡门射线
+  const furnitureHits = [];
+  const FURN_HIT_MAT = new THREE.MeshBasicMaterial({
+    transparent: true, opacity: 0, depthWrite: false, depthWrite: false, side: THREE.DoubleSide
+  });
+  function addFurnitureHit(kind, x, y, z, w, h, d) {
+    const m = mesh(box(w, h, d), FURN_HIT_MAT, x, y, z);
+    m.castShadow = false; m.receiveShadow = false; m.visible = true;
+    m.userData.furniture = kind;
+    roomGroup.add(m);
+    furnitureHits.push(m);
+  }
+  addFurnitureHit('bed', 1.9, 0.55, 2.15, 1.75, 1.05, 2.45);
+  addFurnitureHit('desk', -3.42, 0.72, -2.05, 1.55, 1.15, 1.55);
+  addFurnitureHit('shelf', -3.9, 1.15, 3.28, 1.25, 2.15, 0.55);
+  addFurnitureHit('counter', 4.02, 0.72, -0.5, 0.85, 1.35, 2.35);
+  window.__furnitureHits = furnitureHits;
+
   // 出口的门（铰在门洞左侧并敞开，门洞对着真实前院）
   // 门扇 90° 敞开后几乎侧对镜头，点「看得见的门」经常点空；门洞里放透明点击板
   roomExitDoor = new THREE.Group();
@@ -1848,45 +2030,192 @@ let roomExitDoor, doorExitHit;
 function setShellWallsVisible(v) {
   for (const w of shellWalls) w.visible = v;
 }
-function enterInterior() {
-  if (interiorMode) return;
-  interiorMode = true;
-  camera.fov = 52;
-  camera.near = 0.06;
+/* ---------- 进出室内：相机过渡（位置 / 朝向 / FOV） ---------- */
+const CAM_TRANSIT_DUR = 0.5;
+let camTransit = null;   // { kind, t, dur, fromPos, toPos, fromQuat, toQuat, fromFov, toFov, fromNear, toNear }
+const _camEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _camLookMat = new THREE.Matrix4();
+const _camToQuat = new THREE.Quaternion();
+
+function easeInOutCubic(u) {
+  return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+}
+function indoorEyePos(out) {
+  return out.set(HP.x + camL.x * 0.5, 0.92, HP.z + camL.z * 0.5);
+}
+function quatFromYawPitch(yaw, pitch, out) {
+  _camEuler.set(pitch, yaw, 0, 'YXZ');
+  return out.setFromEuler(_camEuler);
+}
+function quatLookAt(from, target, out) {
+  _camLookMat.lookAt(from, target, UP_Y);
+  return out.setFromRotationMatrix(_camLookMat);
+}
+
+function beginCamTransit(kind) {
+  const fromPos = camera.position.clone();
+  const fromQuat = camera.quaternion.clone();
+  const fromFov = camera.fov;
+  const fromNear = camera.near;
+  const toPos = new THREE.Vector3();
+  const toQuat = new THREE.Quaternion();
+  let toFov, toNear;
+  if (kind === 'enter') {
+    indoorEyePos(toPos);
+    quatFromYawPitch(interiorCam.yaw, interiorCam.pitch, toQuat);
+    toFov = 52; toNear = 0.06;
+  } else {
+    toPos.copy(interiorCam.pos);
+    quatLookAt(toPos, interiorCam.target, toQuat);
+    toFov = 40; toNear = 0.1;
+  }
+  camTransit = {
+    kind, t: 0, dur: CAM_TRANSIT_DUR,
+    fromPos, toPos, fromQuat, toQuat, fromFov, toFov, fromNear, toNear
+  };
+}
+
+function finishCamTransit() {
+  const kind = camTransit.kind;
+  camTransit = null;
+  if (kind === 'enter') {
+    interiorMode = true;
+    camera.fov = 52;
+    camera.near = 0.06;
+    camera.updateProjectionMatrix();
+    camera.rotation.order = 'YXZ';
+    camera.rotation.set(interiorCam.pitch, interiorCam.yaw, 0);
+    indoorEyePos(camera.position);
+    syncTouchChrome(true);
+    showIndoorSessionHint();
+  } else {
+    interiorMode = false;
+    camera.fov = 40;
+    camera.near = 0.1;
+    camera.updateProjectionMatrix();
+    camera.position.copy(interiorCam.pos);
+    controls.target.copy(interiorCam.target);
+    controls.enabled = true;
+    controls.update();
+    syncTouchChrome(false);
+    hint.style.display = '';
+  }
+}
+
+function updateCamTransit(delta) {
+  if (!camTransit) return;
+  camTransit.t += delta;
+  const u = Math.min(1, camTransit.t / camTransit.dur);
+  const k = easeInOutCubic(u);
+  camera.position.lerpVectors(camTransit.fromPos, camTransit.toPos, k);
+  _camToQuat.copy(camTransit.fromQuat).slerp(camTransit.toQuat, k);
+  camera.quaternion.copy(_camToQuat);
+  camera.fov = THREE.MathUtils.lerp(camTransit.fromFov, camTransit.toFov, k);
+  camera.near = THREE.MathUtils.lerp(camTransit.fromNear, camTransit.toNear, k);
   camera.updateProjectionMatrix();
+  if (u >= 1) finishCamTransit();
+}
+
+/* ---------- 室内触控：左半屏移动 / 右半屏环视 + 首次引导 ---------- */
+const vpad = document.getElementById('vpad');
+const vpadKnob = document.getElementById('vpadKnob');
+const lookZone = document.getElementById('lookZone');
+const touchMove = { active: false, id: -1, ox: 0, oy: 0, x: 0, y: 0 };
+const touchLook = { active: false, id: -1, lx: 0, ly: 0 };
+let indoorHintShown = false;
+let indoorHintTimer = 0;
+const IHINT_DESKTOP = '🏠 WASD / 方向键 走动 · 按住拖拽 环视 · 点门离开 · ESC 或点「回到院子」';
+const IHINT_TOUCH = '🏠 左半屏滑动走动 · 右半屏拖拽环视 · 点门离开 · 「回到院子」';
+
+function needsIndoorTouch() {
+  try {
+    if (matchMedia('(pointer: coarse)').matches) return true;
+    if (matchMedia('(hover: none)').matches) return true;
+  } catch (_) {}
+  return innerWidth <= 640;
+}
+function syncTouchChrome(on) {
+  const show = !!(on && needsIndoorTouch());
+  vpad.classList.toggle('on', show);
+  lookZone.classList.toggle('on', show);
+  if (!show) resetVpadKnob();
+}
+function resetVpadKnob() {
+  touchMove.x = 0; touchMove.y = 0;
+  if (vpadKnob) vpadKnob.style.transform = 'translate(-50%, -50%)';
+}
+function setVpadKnob(dx, dy) {
+  const max = Math.min(vpad.clientWidth, vpad.clientHeight) * 0.28 || 30;
+  vpadKnob.style.transform = 'translate(calc(-50% + ' + (dx * max) + 'px), calc(-50% + ' + (dy * max) + 'px))';
+}
+function hideIndoorHint() {
+  if (ihint.style.display === 'none' || ihint.classList.contains('hide')) return;
+  ihint.classList.add('hide');
+  clearTimeout(indoorHintTimer);
+  indoorHintTimer = setTimeout(() => {
+    ihint.style.display = 'none';
+    ihint.classList.remove('hide');
+  }, 480);
+}
+function noteIndoorInput() {
+  if (indoorHintShown && ihint.style.display !== 'none') hideIndoorHint();
+}
+function showIndoorSessionHint() {
+  if (indoorHintShown) return;
+  indoorHintShown = true;
+  ihint.textContent = needsIndoorTouch() ? IHINT_TOUCH : IHINT_DESKTOP;
+  ihint.classList.remove('hide');
+  ihint.style.display = '';
+  clearTimeout(indoorHintTimer);
+  indoorHintTimer = setTimeout(hideIndoorHint, 4000);
+}
+
+function enterInterior() {
+  if (interiorMode || (camTransit && camTransit.kind === 'enter')) return;
+  if (camTransit && camTransit.kind === 'exit') camTransit = null;
   controls.enabled = false;
+  controls.update();
   interiorCam.pos.copy(camera.position);
   interiorCam.target.copy(controls.target);
-  camera.rotation.order = 'YXZ';
+  camera.lookAt(interiorCam.target);  // 同步 quaternion，过渡起点不跳
   camL.x = -3.2; camL.z = 0.4;
   interiorCam.yaw = 0;      // 起居室对着后窗，平视院子
   interiorCam.pitch = -0.16;
   setShellWallsVisible(false);   // 藏起外壳墙，避免双层墙的侧边把窗洞填成米色板
-  ihint.style.display = '';
   btnExit.style.display = '';
   hint.style.display = 'none';
+  ihint.style.display = 'none';
+  ihint.classList.remove('hide');
+  beginCamTransit('enter');
 }
 function exitInterior() {
-  if (!interiorMode) return;
+  if (camTransit && camTransit.kind === 'exit') return;
+  if (!interiorMode && !(camTransit && camTransit.kind === 'enter')) return;
+  // 打断进屋过渡：从当前插值位置回到院子
+  if (camTransit && camTransit.kind === 'enter') camTransit = null;
   interiorMode = false;
-  camera.fov = 40;
-  camera.near = 0.1;
-  camera.updateProjectionMatrix();
-  controls.enabled = true;
-  camera.position.copy(interiorCam.pos);
-  controls.target.copy(interiorCam.target);
-  controls.update();
-  setShellWallsVisible(true);
+  controls.enabled = false;
+  clearTimeout(indoorHintTimer);
   ihint.style.display = 'none';
+  ihint.classList.remove('hide');
   btnExit.style.display = 'none';
-  hint.style.display = '';
+  setShellWallsVisible(true);
+  syncTouchChrome(false);
+  touchMove.active = false; touchLook.active = false;
+  resetVpadKnob();
+  beginCamTransit('exit');
 }
 btnExit.addEventListener('click', () => exitInterior());
 addEventListener('keydown', e => {
   roomKeys[e.key.toLowerCase()] = true;
-  if (e.key === 'Escape' && interiorMode) exitInterior();
+  if (interiorMode && !camTransit && (roomKeys['w'] || roomKeys['a'] || roomKeys['s'] || roomKeys['d'] ||
+      roomKeys['arrowup'] || roomKeys['arrowdown'] || roomKeys['arrowleft'] || roomKeys['arrowright'])) {
+    noteIndoorInput();
+  }
+  if (e.key === 'Escape' && (interiorMode || (camTransit && camTransit.kind === 'enter'))) exitInterior();
 });
 addEventListener('keyup', e => { roomKeys[e.key.toLowerCase()] = false; });
+renderer.domElement.style.touchAction = 'none';
 
 /* ---------- 小女孩在屋里的随机小动作（卧室 / 起居室 / 厨房三个房间） ---------- */
 const iGirl = { state: 'walk', path: [], act: null, until: 0, blend: 0, phase: 0,
@@ -2270,7 +2599,13 @@ const CITIES = [
   { id: 'la', name: '洛杉矶', tz: 'America/Los_Angeles', lat: 34.0522, lon: -118.2437 },
   { id: 'sydney', name: '悉尼', tz: 'Australia/Sydney', lat: -33.8688, lon: 151.2093 },
 ];
+const CITY_KEY = 'yard-city';
 let currentCity = CITIES[0];
+try {
+  const savedCity = localStorage.getItem(CITY_KEY);
+  const foundCity = CITIES.find(c => c.id === savedCity);
+  if (foundCity) currentCity = foundCity;
+} catch (_) {}
 
 function tzParts(tz) {
   return new Intl.DateTimeFormat('en-GB', {
@@ -2335,9 +2670,10 @@ async function fetchWeather(city) {
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&current=weather_code,temperature_2m,is_day,precipitation,cloud_cover,wind_speed_10m&timezone=auto`;
     const r = await fetch(url);
-    if (!r.ok) return;
+    if (!r.ok) throw new Error('wx http ' + r.status);
     const j = await r.json();
     const cur = j.current || {};
+    if (cur.weather_code == null && cur.temperature_2m == null) throw new Error('wx empty');
     weather.temp = cur.temperature_2m;
     weather.code = cur.weather_code;
     weather.cloud = cur.cloud_cover;
@@ -2345,7 +2681,9 @@ async function fetchWeather(city) {
     const el = document.getElementById('clockTemp');
     if (el && weather.temp != null) el.textContent = Math.round(weather.temp) + '°';
   } catch (e) {
-    /* silent degrade */
+    // 非阻塞提示；保留上次天气/天空，失败前无数据则继续默认 clear
+    const wxEl = document.getElementById('clockWx');
+    if (wxEl) wxEl.textContent = ' 天气暂不可用';
   }
 }
 
@@ -2365,8 +2703,220 @@ const NIGHT = {
   ambCol: new THREE.Color(0x36406b), ambInt: 0.12,
 };
 
+
+/* ============================================================
+   环境音（Web Audio 程序化循环）· localStorage: yard-audio = on|off · 默认静音
+   软风常驻；雨天加细雨；夜晚加安静虫鸣。需用户手势（点按钮）后才能出声。
+============================================================ */
+const AUDIO_KEY = 'yard-audio';
+let audioWanted = false;
+try { audioWanted = localStorage.getItem(AUDIO_KEY) === 'on'; } catch (_) {}
+
+let audioCtx = null;
+let masterGain = null, windGain = null, rainGain = null, insectGain = null;
+let audioBuilt = false;
+
+function makeNoiseBuffer(ctx, seconds = 2.5) {
+  const n = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < n; i++) {
+    const white = Math.random() * 2 - 1;
+    last = (last + 0.02 * white) / 1.02; // soft brown-ish
+    d[i] = last * 3.5;
+  }
+  return buf;
+}
+
+function buildAmbientGraph(ctx) {
+  masterGain = ctx.createGain();
+  masterGain.gain.value = 0;
+  masterGain.connect(ctx.destination);
+
+  const noiseBuf = makeNoiseBuffer(ctx);
+
+  // Soft wind
+  const windSrc = ctx.createBufferSource();
+  windSrc.buffer = noiseBuf;
+  windSrc.loop = true;
+  const windFilter = ctx.createBiquadFilter();
+  windFilter.type = 'lowpass';
+  windFilter.frequency.value = 380;
+  windFilter.Q.value = 0.4;
+  windGain = ctx.createGain();
+  windGain.gain.value = 0.035;
+  windSrc.connect(windFilter);
+  windFilter.connect(windGain);
+  windGain.connect(masterGain);
+  const windLfo = ctx.createOscillator();
+  windLfo.type = 'sine';
+  windLfo.frequency.value = 0.07;
+  const windLfoG = ctx.createGain();
+  windLfoG.gain.value = 90;
+  windLfo.connect(windLfoG);
+  windLfoG.connect(windFilter.frequency);
+  windSrc.start();
+  windLfo.start();
+
+  // Light rain (brighter band-limited noise)
+  const rainSrc = ctx.createBufferSource();
+  rainSrc.buffer = noiseBuf;
+  rainSrc.loop = true;
+  const rainFilter = ctx.createBiquadFilter();
+  rainFilter.type = 'bandpass';
+  rainFilter.frequency.value = 2400;
+  rainFilter.Q.value = 0.55;
+  rainGain = ctx.createGain();
+  rainGain.gain.value = 0;
+  rainSrc.playbackRate.value = 1.17;
+  rainSrc.connect(rainFilter);
+  rainFilter.connect(rainGain);
+  rainGain.connect(masterGain);
+  rainSrc.start();
+
+  // Quiet night insects: bus + soft peeps
+  insectGain = ctx.createGain();
+  insectGain.gain.value = 0;
+  insectGain.connect(masterGain);
+  const bugSrc = ctx.createBufferSource();
+  bugSrc.buffer = noiseBuf;
+  bugSrc.loop = true;
+  const bugBP = ctx.createBiquadFilter();
+  bugBP.type = 'bandpass';
+  bugBP.frequency.value = 5200;
+  bugBP.Q.value = 10;
+  const bugAmp = ctx.createGain();
+  bugAmp.gain.value = 0.018;
+  bugSrc.connect(bugBP);
+  bugBP.connect(bugAmp);
+  bugAmp.connect(insectGain);
+  bugSrc.start();
+  for (let i = 0; i < 2; i++) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 4100 + i * 780;
+    const amp = ctx.createGain();
+    amp.gain.value = 0;
+    osc.connect(amp);
+    amp.connect(insectGain);
+    const cs = ctx.createConstantSource();
+    cs.offset.value = 0.0035;
+    cs.connect(amp.gain);
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.16 + i * 0.09;
+    const lfoG = ctx.createGain();
+    lfoG.gain.value = 0.0035;
+    lfo.connect(lfoG);
+    lfoG.connect(amp.gain);
+    const chirp = ctx.createOscillator();
+    chirp.type = 'sine';
+    chirp.frequency.value = 5.2 + i * 1.4;
+    const chirpG = ctx.createGain();
+    chirpG.gain.value = 0.0022;
+    chirp.connect(chirpG);
+    chirpG.connect(amp.gain);
+    osc.start(); cs.start(); lfo.start(); chirp.start();
+  }
+  audioBuilt = true;
+}
+
+async function ensureAmbientAudio() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    audioCtx = new AC();
+    buildAmbientGraph(audioCtx);
+  }
+  if (audioCtx.state === 'suspended') {
+    try { await audioCtx.resume(); } catch (_) { return false; }
+  }
+  return true;
+}
+
+function syncAudioButton() {
+  const btn = document.getElementById('btnAudio');
+  if (!btn) return;
+  btn.textContent = audioWanted ? '环境音 开' : '环境音 关';
+  btn.classList.toggle('active', audioWanted);
+}
+
+function duckAmbient(fast = false) {
+  if (!masterGain || !audioCtx) return;
+  masterGain.gain.setTargetAtTime(0, audioCtx.currentTime, fast ? 0.05 : 0.12);
+}
+
+let _ambWant = { master: -1, wind: -1, rain: -1, insect: -1 };
+function tickAmbientAudio() {
+  if (!audioBuilt || !masterGain || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const on = audioWanted && !document.hidden;
+  const masterT = on ? 1 : 0;
+  if (masterT !== _ambWant.master) {
+    _ambWant.master = masterT;
+    masterGain.gain.setTargetAtTime(masterT, now, 0.18);
+  }
+  if (!on) {
+    if (_ambWant.rain !== 0 && rainGain) { _ambWant.rain = 0; rainGain.gain.setTargetAtTime(0, now, 0.2); }
+    if (_ambWant.insect !== 0 && insectGain) { _ambWant.insect = 0; insectGain.gain.setTargetAtTime(0, now, 0.2); }
+    return;
+  }
+  if (windGain && _ambWant.wind !== 0.038) {
+    _ambWant.wind = 0.038;
+    windGain.gain.setTargetAtTime(0.038, now, 0.35);
+  }
+  const raining = (typeof weather !== 'undefined' && weather.kind === 'rain')
+    || (typeof weatherMul !== 'undefined' && weatherMul.wet > 0.5);
+  const rainT = raining ? 0.048 : 0;
+  if (rainGain && rainT !== _ambWant.rain) {
+    _ambWant.rain = rainT;
+    rainGain.gain.setTargetAtTime(rainT, now, 0.45);
+  }
+  const night = (typeof env !== 'undefined' && env > 0.45);
+  const insectT = night ? 1 : 0;
+  if (insectGain && insectT !== _ambWant.insect) {
+    _ambWant.insect = insectT;
+    insectGain.gain.setTargetAtTime(insectT, now, 0.55);
+  }
+}
+
+syncAudioButton();
+document.getElementById('btnAudio')?.addEventListener('click', async e => {
+  e.stopPropagation();
+  audioWanted = !audioWanted;
+  try { localStorage.setItem(AUDIO_KEY, audioWanted ? 'on' : 'off'); } catch (_) {}
+  syncAudioButton();
+  if (audioWanted) {
+    await ensureAmbientAudio();
+    tickAmbientAudio();
+  } else {
+    duckAmbient(true);
+    if (audioCtx && audioCtx.state === 'running') {
+      setTimeout(() => {
+        if (!audioWanted && audioCtx) audioCtx.suspend().catch(() => {});
+      }, 350);
+    }
+  }
+});
+// 若上次偏好为开：等首次指针手势再启动 AudioContext（浏览器自动播放策略）
+if (audioWanted) {
+  const kick = async () => {
+    document.removeEventListener('pointerdown', kick);
+    if (!audioWanted) return;
+    await ensureAmbientAudio();
+    tickAmbientAudio();
+  };
+  document.addEventListener('pointerdown', kick, { once: true });
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) duckAmbient();
+  else if (audioWanted) tickAmbientAudio();
+});
+
 const btnDay = document.getElementById('btnDay');
 const btnRotate = document.getElementById('btnRotate');
+const btnQuality = document.getElementById('btnQuality');
 btnDay.addEventListener('click', () => {
   timeAuto = false;   // 手动切换后暂停跟随当地时间，直到再选城市
   envTarget = envTarget >= 0.5 ? 0 : 1;
@@ -2377,6 +2927,10 @@ btnRotate.addEventListener('click', () => {
   controls.autoRotate = !controls.autoRotate;
   btnRotate.classList.toggle('active', controls.autoRotate);
 });
+btnQuality.addEventListener('click', () => {
+  applyQuality(quality === 'high' ? 'low' : 'high', true);
+});
+syncQualityButton();
 
 const citySelect = document.getElementById('citySelect');
 const clockTime = document.getElementById('clockTime');
@@ -2386,10 +2940,11 @@ for (const c of CITIES) {
   o.value = c.id; o.textContent = c.name;
   citySelect.appendChild(o);
 }
-citySelect.value = 'beijing';
+citySelect.value = currentCity.id;
 citySelect.addEventListener('pointerdown', e => e.stopPropagation());
 citySelect.addEventListener('change', () => {
   currentCity = CITIES.find(c => c.id === citySelect.value) || CITIES[0];
+  try { localStorage.setItem(CITY_KEY, currentCity.id); } catch (_) {}
   timeAuto = true; // restore auto lighting on city change
   envTarget = envFromHour(cityHourFrac(currentCity.tz));
   syncDayButton();
@@ -2423,6 +2978,240 @@ function syncDayButton() {
 }
 
 /* ============================================================
+   轻提示 Toast / 室内家具点按 / 院子微互动 / 絮语文案
+============================================================ */
+const toastEl = document.getElementById('toast');
+let toastTimer = 0;
+function showToast(msg, ms = 1800) {
+  if (!toastEl || !msg) return;
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+const FURNITURE_TOAST = {
+  bed: '软软的小床，午后想躺一会儿…',
+  desk: '书桌整整齐齐，适合写一封信。',
+  shelf: '书架上的小书轻轻闪着光。',
+  counter: '厨房台面飘着点心香～',
+};
+const FURN_ACT = { bed: 'bed', desk: 'chair', shelf: 'shelf', counter: 'counter' };
+const FURN_LOOK = {
+  bed: { x: 1.9, y: 0.6, z: 2.2 },
+  desk: { x: -3.42, y: 0.8, z: -2.1 },
+  shelf: { x: -3.9, y: 1.2, z: 3.3 },
+  counter: { x: 4.02, y: 0.9, z: -0.5 },
+};
+let furnLook = null; // { t0, dur, fromY, fromP, toY, toP }
+
+function yawPitchTowardRoomLocal(lx, ly, lz) {
+  const eye = indoorEyePos(new THREE.Vector3());
+  const tx = HP.x + lx * 0.5, ty = ly, tz = HP.z + lz * 0.5;
+  const dx = tx - eye.x, dy = ty - eye.y, dz = tz - eye.z;
+  const horiz = Math.hypot(dx, dz) || 1e-4;
+  const yaw = Math.atan2(-dx, -dz);
+  const pitch = Math.max(-1.0, Math.min(0.45, Math.atan2(-dy, horiz)));
+  return { yaw, pitch };
+}
+function beginFurnitureLook(kind) {
+  const p = FURN_LOOK[kind];
+  if (!p || !interiorMode || camTransit) return;
+  const { yaw, pitch } = yawPitchTowardRoomLocal(p.x, p.y, p.z);
+  furnLook = {
+    t0: clock.elapsedTime, dur: 0.55,
+    fromY: interiorCam.yaw, fromP: interiorCam.pitch,
+    toY: yaw, toP: pitch,
+  };
+}
+function sendGirlToFurniture(kind) {
+  const act = FURN_ACT[kind];
+  if (!act || girl.parent !== roomGroup) return;
+  const sp = ROOM_SPOTS.find(s => s.act === act);
+  if (!sp) return;
+  iGirl.act = sp.act;
+  iGirl.path = routeTo(girl.position.x, girl.position.z, sp.x, sp.z);
+  iGirl.state = 'walk';
+  girl.position.y = 0;
+  legL.rotation.z = legR.rotation.z = 0;
+}
+function onFurnitureClick(kind) {
+  showToast(FURNITURE_TOAST[kind] || '这里有点温馨。');
+  beginFurnitureLook(kind);
+  sendGirlToFurniture(kind);
+  noteIndoorInput();
+}
+
+const YARD_TOAST = {
+  sunflower: '向日葵轻轻晃了晃花盘。',
+  lantern: '灯笼暖暖地亮了一下。',
+  koi: '锦鲤扑棱一下，溅起小涟漪。',
+};
+const popAnims = []; // { obj, t0, dur, base }
+function triggerScalePop(obj, amp = 0.14, dur = 0.38) {
+  if (!obj) return;
+  const base = obj.userData.baseScale != null ? obj.userData.baseScale : (obj.scale.x || 1);
+  obj.userData.baseScale = base;
+  // 去掉同一物体旧动画
+  for (let i = popAnims.length - 1; i >= 0; i--) if (popAnims[i].obj === obj) popAnims.splice(i, 1);
+  popAnims.push({ obj, t0: clock.elapsedTime, dur, amp, base });
+}
+function updatePopAnims(t) {
+  for (let i = popAnims.length - 1; i >= 0; i--) {
+    const a = popAnims[i];
+    const u = (t - a.t0) / a.dur;
+    if (u >= 1) {
+      a.obj.scale.setScalar(a.base);
+      popAnims.splice(i, 1);
+      continue;
+    }
+    const k = Math.sin(u * Math.PI); // 起落一弹
+    a.obj.scale.setScalar(a.base * (1 + a.amp * k));
+  }
+}
+
+// 简易金粉粒子（点击院子物）
+const sparkPool = [];
+const SPARK_N = 18;
+{
+  const geo = new THREE.SphereGeometry(0.045, 6, 6);
+  for (let i = 0; i < SPARK_N; i++) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0xffe08a, transparent: true, opacity: 0, depthWrite: false
+    }));
+    m.visible = false;
+    m.userData = { life: 0, max: 0.6, vx: 0, vy: 0, vz: 0 };
+    scene.add(m);
+    sparkPool.push(m);
+  }
+}
+function burstSparks(worldPos, color = 0xffe08a, n = 8) {
+  let used = 0;
+  for (const m of sparkPool) {
+    if (m.visible && m.userData.life > 0) continue;
+    m.visible = true;
+    m.material.color.setHex(color);
+    m.material.opacity = 0.95;
+    m.position.copy(worldPos);
+    m.position.x += (Math.random() - 0.5) * 0.12;
+    m.position.y += 0.05 + Math.random() * 0.1;
+    m.position.z += (Math.random() - 0.5) * 0.12;
+    m.userData.life = 0.45 + Math.random() * 0.25;
+    m.userData.max = m.userData.life;
+    m.userData.vx = (Math.random() - 0.5) * 1.2;
+    m.userData.vy = 0.9 + Math.random() * 1.1;
+    m.userData.vz = (Math.random() - 0.5) * 1.2;
+    used++;
+    if (used >= n) break;
+  }
+}
+function updateSparks(delta) {
+  for (const m of sparkPool) {
+    if (!m.visible) continue;
+    m.userData.life -= delta;
+    if (m.userData.life <= 0) { m.visible = false; continue; }
+    m.position.x += m.userData.vx * delta;
+    m.position.y += m.userData.vy * delta;
+    m.position.z += m.userData.vz * delta;
+    m.userData.vy -= 1.8 * delta;
+    m.material.opacity = Math.max(0, m.userData.life / m.userData.max);
+  }
+}
+function onYardClick(kind, obj) {
+  showToast(YARD_TOAST[kind] || '院子里有点小动静。');
+  triggerScalePop(obj, kind === 'koi' ? 0.22 : 0.12, 0.4);
+  const wp = new THREE.Vector3();
+  obj.getWorldPosition(wp);
+  if (kind === 'sunflower') wp.y += 1.0;
+  else if (kind === 'lantern') wp.y += 0.1;
+  else wp.y += 0.15;
+  burstSparks(wp, kind === 'koi' ? 0xff9a5c : (kind === 'lantern' ? 0xffc56a : 0xffe66d), kind === 'koi' ? 6 : 9);
+}
+
+/* ---------- 轻叙事状态卡（按当地城市时刻） ---------- */
+const statusCard = document.getElementById('statusCard');
+const statusText = document.getElementById('statusText');
+const STATUS_LINES = {
+  morning: [
+    '清晨的院子刚醒，厨房该热一碗粥了。',
+    '阳光斜斜爬上篱笆，小猫还在伸懒腰。',
+    '向日葵抬起头，好像在等第一口点心。',
+  ],
+  afternoon: [
+    '午后有点困，小床在招呼人小憩。',
+    '池塘波光轻轻，锦鲤慢慢转圈。',
+    '风车转呀转，连兔子耳朵也跟着晃。',
+  ],
+  evening: [
+    '暮色里，门廊灯笼先亮起来了。',
+    '屋里窗灯暖暖的，像在等谁回家。',
+    '晚饭香气好像从厨房窗飘出来。',
+  ],
+  night: [
+    '夜里萤火虫一闪一闪，院子很安静。',
+    '月亮挂在屋脊上，串灯轻轻呼吸。',
+    '睡前再看一眼小院，明天又是新一天。',
+  ],
+};
+let statusDismissed = false;
+let statusIdx = 0;
+let statusBucket = '';
+let statusNextAt = 0;
+function statusPeriod(h) {
+  if (h >= 5 && h < 11) return 'morning';
+  if (h >= 11 && h < 17) return 'afternoon';
+  if (h >= 17 && h < 22) return 'evening';
+  return 'night';
+}
+function pickStatusLine(force = false) {
+  if (statusDismissed || !statusCard || !statusText) return;
+  const h = cityHourFrac(currentCity.tz);
+  const bucket = statusPeriod(h);
+  const lines = STATUS_LINES[bucket];
+  if (bucket !== statusBucket) { statusBucket = bucket; statusIdx = 0; }
+  else if (!force) statusIdx = (statusIdx + 1) % lines.length;
+  statusText.textContent = lines[statusIdx % lines.length];
+  statusCard.classList.remove('hide');
+  statusNextAt = performance.now() + 52000 + Math.random() * 18000;
+}
+function dismissStatus() {
+  statusDismissed = true;
+  if (statusCard) statusCard.classList.add('hide');
+}
+document.getElementById('statusDismiss')?.addEventListener('click', e => {
+  e.stopPropagation();
+  dismissStatus();
+});
+// 开场稍晚再出现，不抢加载提示
+setTimeout(() => { if (!statusDismissed) pickStatusLine(true); }, 2800);
+setInterval(() => {
+  if (statusDismissed) return;
+  if (performance.now() >= statusNextAt) pickStatusLine(false);
+}, 4000);
+
+function takeYardPhoto() {
+  const was = controls.autoRotate;
+  controls.autoRotate = false;
+  if (!camTransit) renderer.render(scene, camera);
+  let url;
+  try { url = renderer.domElement.toDataURL('image/png'); }
+  catch (_) { showToast('拍照失败了，再试一次吧'); controls.autoRotate = was; return; }
+  controls.autoRotate = was;
+  const a = document.createElement('a');
+  const stamp = cityHM(currentCity.tz).replace(':', '');
+  a.href = url;
+  a.download = `小院时光-${currentCity.name}-${stamp}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  showToast('今日小院已收进相册啦 📷', 2000);
+}
+document.getElementById('btnPhoto')?.addEventListener('click', e => {
+  e.stopPropagation();
+  takeYardPhoto();
+});
+
+/* ============================================================
    点击小女孩（区分点击与拖拽）
 ============================================================ */
 const raycaster = new THREE.Raycaster();
@@ -2445,15 +3234,68 @@ function rayHitsDoorway() {
   return false;
 }
 let downX = 0, downY = 0, lookX = 0, lookY = 0;
-renderer.domElement.addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; lookX = e.clientX; lookY = e.clientY; });
+renderer.domElement.addEventListener('pointerdown', e => {
+  downX = e.clientX; downY = e.clientY; lookX = e.clientX; lookY = e.clientY;
+  if (!interiorMode || camTransit) return;
+  if (!needsIndoorTouch()) return;
+  const mid = innerWidth * 0.5;
+  if (e.clientX < mid) {
+    // 左半屏：虚拟摇杆走动
+    touchMove.active = true; touchMove.id = e.pointerId;
+    touchMove.ox = e.clientX; touchMove.oy = e.clientY;
+    touchMove.x = 0; touchMove.y = 0;
+    setVpadKnob(0, 0);
+    try { renderer.domElement.setPointerCapture(e.pointerId); } catch (_) {}
+  } else {
+    // 右半屏：环视
+    touchLook.active = true; touchLook.id = e.pointerId;
+    touchLook.lx = e.clientX; touchLook.ly = e.clientY;
+    try { renderer.domElement.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+});
 renderer.domElement.addEventListener('pointermove', e => {
-  if (!interiorMode || !(e.buttons & 1)) return;   // 室内：按住拖拽环视
+  if (camTransit || !interiorMode) return;
+  if (touchMove.active && e.pointerId === touchMove.id) {
+    const maxR = 52;
+    let dx = e.clientX - touchMove.ox, dy = e.clientY - touchMove.oy;
+    const len = Math.hypot(dx, dy) || 1;
+    if (len > maxR) { dx *= maxR / len; dy *= maxR / len; }
+    touchMove.x = dx / maxR;
+    touchMove.y = dy / maxR;
+    setVpadKnob(touchMove.x, touchMove.y);
+    if (touchMove.x * touchMove.x + touchMove.y * touchMove.y > 0.01) noteIndoorInput();
+    return;
+  }
+  if (touchLook.active && e.pointerId === touchLook.id) {
+    interiorCam.yaw -= (e.clientX - touchLook.lx) * 0.0052;
+    interiorCam.pitch = Math.max(-1.1, Math.min(0.5, interiorCam.pitch - (e.clientY - touchLook.ly) * 0.0042));
+    touchLook.lx = e.clientX; touchLook.ly = e.clientY;
+    noteIndoorInput();
+    return;
+  }
+  if (!(e.buttons & 1)) return;   // 桌面：按住拖拽环视
+  if (needsIndoorTouch()) return; // 触控路径走上面的双区
   interiorCam.yaw -= (e.clientX - lookX) * 0.0052;
   interiorCam.pitch = Math.max(-1.1, Math.min(0.5, interiorCam.pitch - (e.clientY - lookY) * 0.0042));
   lookX = e.clientX; lookY = e.clientY;
+  noteIndoorInput();
 });
+function endTouchPointer(e) {
+  if (touchMove.active && e.pointerId === touchMove.id) {
+    touchMove.active = false; touchMove.id = -1;
+    resetVpadKnob();
+  }
+  if (touchLook.active && e.pointerId === touchLook.id) {
+    touchLook.active = false; touchLook.id = -1;
+  }
+}
 renderer.domElement.addEventListener('pointerup', e => {
-  if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+  const wasTouchMove = touchMove.active && e.pointerId === touchMove.id;
+  const moveDist = Math.hypot(e.clientX - downX, e.clientY - downY);
+  endTouchPointer(e);
+  if (wasTouchMove && moveDist > 6) return; // 摇杆滑动不当点击
+  if (moveDist > 6) return;
+  if (camTransit) return;
   setPointerFromClient(e.clientX, e.clientY);
   camera.updateMatrixWorld(true);
   raycaster.setFromCamera(pointer, camera);
@@ -2484,11 +3326,33 @@ renderer.domElement.addEventListener('pointerup', e => {
     bunnyState.until = clock.elapsedTime + 1.4;
     return;
   }
-  if (interiorMode) return;                    // 室内其余点击不处理
+  // 室内家具点按（门射线已优先；不打断出门）
+  if (interiorMode) {
+    const hits = window.__furnitureHits || [];
+    if (hits.length) {
+      const fh = raycaster.intersectObjects(hits, false);
+      if (fh.length) {
+        const kind = fh[0].object.userData.furniture;
+        if (kind) { onFurnitureClick(kind); return; }
+      }
+    }
+    return;                                    // 室内其余点击不处理
+  }
+  // 院子微互动：向日葵 / 灯笼 / 锦鲤（先于点房子进屋）
+  {
+    const yardObjs = [...sunflowerGroups, ...lanternMeshes, ...kois.map(k => k.g)];
+    const yh = raycaster.intersectObjects(yardObjs, true);
+    if (yh.length) {
+      let o = yh[0].object;
+      while (o && !o.userData.yardKind && o.parent) o = o.parent;
+      if (o && o.userData.yardKind) { onYardClick(o.userData.yardKind, o); return; }
+    }
+  }
   if (raycaster.intersectObjects(houseMeshes, false).length) {
     enterInterior();                           // 点击房子 → 进屋看看
   }
 });
+renderer.domElement.addEventListener('pointercancel', endTouchPointer);
 
 /* ============================================================
    动画循环
@@ -2508,6 +3372,7 @@ function animate() {
   }
   clockTime.textContent = currentCity.name + ' ' + cityHM(currentCity.tz);
   env += (envTarget - env) * Math.min(1, delta * 1.6);
+  tickAmbientAudio();
   const e = env;
   skyMat.uniforms.topColor.value.copy(DAY.skyTop).lerp(NIGHT.skyTop, e);
   skyMat.uniforms.bottomColor.value.copy(DAY.skyBottom).lerp(NIGHT.skyBottom, e);
@@ -2909,7 +3774,7 @@ function animate() {
 
   if (rainLines.visible) {
     const arr = rainGeo.attributes.position.array;
-    for (let i = 0; i < RAIN_N; i++) {
+    for (let i = 0; i < rainLive; i++) {
       const dy = rainSpd[i] * delta;
       arr[i * 6 + 1] -= dy;
       arr[i * 6 + 4] -= dy;
@@ -2933,7 +3798,7 @@ function animate() {
   if (snowPoints.visible) {
     const arr = snowPoints.geometry.attributes.position.array;
     const spd = snowPoints.userData.spd;
-    for (let i = 0; i < spd.length; i++) {
+    for (let i = 0; i < snowLive; i++) {
       arr[i*3 + 1] -= (1.6 + spd[i] * 1.2) * delta;
       arr[i*3] += Math.sin(t * 0.8 + i) * 0.4 * delta;
       if (arr[i*3 + 1] < 0) {
@@ -3111,20 +3976,42 @@ function animate() {
     }
   }
 
-  if (interiorMode) {
-    // 室内漫游：WASD/方向键 在房间里走动
+  // 家具点按：短促看向目标
+  if (furnLook && interiorMode && !camTransit) {
+    const u = Math.min(1, (t - furnLook.t0) / furnLook.dur);
+    const e2 = u * u * (3 - 2 * u);
+    let dy = furnLook.toY - furnLook.fromY;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    interiorCam.yaw = furnLook.fromY + dy * e2;
+    interiorCam.pitch = furnLook.fromP + (furnLook.toP - furnLook.fromP) * e2;
+    if (u >= 1) furnLook = null;
+  }
+  updatePopAnims(t);
+  updateSparks(delta);
+
+  if (camTransit) {
+    updateCamTransit(delta);
+  } else if (interiorMode) {
+    // 室内漫游：WASD/方向键 + 触控摇杆
     const mv = new THREE.Vector3();
     if (roomKeys['w'] || roomKeys['arrowup']) mv.z -= 1;
     if (roomKeys['s'] || roomKeys['arrowdown']) mv.z += 1;
     if (roomKeys['a'] || roomKeys['arrowleft']) mv.x -= 1;
     if (roomKeys['d'] || roomKeys['arrowright']) mv.x += 1;
+    if (touchMove.active && (touchMove.x || touchMove.y)) {
+      mv.x += touchMove.x;
+      mv.z += touchMove.y;
+    }
     if (mv.lengthSq() > 0) {
       mv.normalize().applyAxisAngle(UP_Y, interiorCam.yaw);
       camL.x += mv.x * 1.3 * delta;
       camL.z += mv.z * 1.3 * delta;
       [camL.x, camL.z] = resolveRoomClip(camL.x, camL.z, 0.3);
+      noteIndoorInput();
     }
-    camera.position.set(HP.x + camL.x * 0.5, 0.92, HP.z + camL.z * 0.5);
+    indoorEyePos(camera.position);
+    camera.rotation.order = 'YXZ';
     camera.rotation.set(interiorCam.pitch, interiorCam.yaw, 0);
   } else {
     controls.update();
@@ -3136,20 +4023,21 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (interiorMode && !camTransit) syncTouchChrome(true);
 });
 
 document.getElementById('loading').classList.add('hide');
 
 // 调试探针：控制台可用 __yard() 查看内部状态；__yardStep(n) 手动推进 n 帧（页面在后台 rAF 暂停时用）
 const __scr = v => { const p = v.clone().project(camera); return [Math.round((p.x * 0.5 + 0.5) * innerWidth), Math.round((-p.y * 0.5 + 0.5) * innerHeight)]; };
-window.__yard = () => ({ env, envTarget, timeAuto, umbrellaOpen, wx: weather.kind, rainbowPending, rainbowFade, autoRotate: controls.autoRotate,
+window.__yard = () => ({ env, envTarget, timeAuto, umbrellaOpen, wx: weather.kind, rainbowPending, rainbowFade, autoRotate: controls.autoRotate, audio: audioWanted,
   state: walk.state, spot: walk.spot ? walk.spot.kind : null,
   armX: +armR.rotation.x.toFixed(2), armZ: +armR.rotation.z.toFixed(2),
   upos: umbrella.getWorldPosition(new THREE.Vector3()).toArray().map(v => +v.toFixed(2)),
   gpos: girl.position.toArray().map(v => +v.toFixed(2)),
   girlScr: __scr(girl.getWorldPosition(new THREE.Vector3())), catScr: __scr(cat.position.clone().setY(0.3)), bunnyScr: __scr(bunny.position.clone().setY(0.15)),
   houseScr: __scr(house.position.clone().setY(1.2)), doorScr: __scr(roomExitDoor.getWorldPosition(new THREE.Vector3())),
-  imode: interiorMode, cam: camera.position.toArray().map(v => +v.toFixed(2)),
+  imode: interiorMode, camTransit: camTransit && camTransit.kind, cam: camera.position.toArray().map(v => +v.toFixed(2)),
   catY: +cat.position.y.toFixed(3), bunnyMode: bunnyState.mode, catExcited: clock.elapsedTime < catExcitedUntil,
   istate: iGirl.state, iact: iGirl.act, iblend: +iGirl.blend.toFixed(2), iuntil: +(iGirl.until - clock.elapsedTime).toFixed(1) });
 window.__yardEnter = () => enterInterior();
@@ -3201,7 +4089,6 @@ window.__yardClickDoor = () => {
 {
   const q = new URLSearchParams(location.search);
   if (q.has('inside') || q.has('clickdoor')) {
-    enterInterior();
     const cam = q.get('cam') || (q.has('clickdoor') ? '-2.3,2.1,3.1416' : '');
     if (cam) {
       const [x, z, yaw] = cam.split(',').map(Number);
@@ -3209,6 +4096,23 @@ window.__yardClickDoor = () => {
       if (Number.isFinite(z)) camL.z = z;
       if (Number.isFinite(yaw)) interiorCam.yaw = yaw;
     }
+    // 跳过过渡，调试直达室内
+    controls.enabled = false;
+    interiorCam.pos.copy(camera.position);
+    interiorCam.target.copy(controls.target);
+    if (!cam) { camL.x = -3.2; camL.z = 0.4; interiorCam.yaw = 0; }
+    if (!Number.isFinite(interiorCam.pitch)) interiorCam.pitch = -0.16;
+    else if (!cam) interiorCam.pitch = -0.16;
+    setShellWallsVisible(false);
+    btnExit.style.display = '';
+    hint.style.display = 'none';
+    camera.fov = 52; camera.near = 0.06; camera.updateProjectionMatrix();
+    camera.rotation.order = 'YXZ';
+    indoorEyePos(camera.position);
+    camera.rotation.set(interiorCam.pitch, interiorCam.yaw, 0);
+    interiorMode = true;
+    syncTouchChrome(true);
+    showIndoorSessionHint();
     if (q.has('clickdoor')) {
       setTimeout(() => { window.__doorClickResult = window.__yardClickDoor(); }, 600);
     }

@@ -1613,17 +1613,14 @@ head.position.set(0, 1.34, 0);
 girl.add(head);
 head.add(mesh(sph(0.2, 24), skinMat, 0, 0, 0));
 // Cartoon hair remodel (HAIR=0x5b3a2e): solid toon meshes only — NO fluffify on any girl hair.
-// Bowl sits BACK and UP so front (+z) stays clearly behind the eyes (eyes ~z 0.16–0.18).
-const hairCap = mesh(sph(0.22, 24), hairMat, 0, 0.06, -0.12);
-hairCap.scale.set(1.05, 0.88, 0.85);
+// Bowl sits BACK and LOW so top stays under hat brim (~y=0.13); front (+z) behind eyes.
+const hairCap = mesh(sph(0.22, 24), hairMat, 0, 0.025, -0.12);
+hairCap.scale.set(1.05, 0.50, 0.85);
 head.add(hairCap);
-// Small crown bump under the hat — high Y, low Z reach
-const hairCrown = mesh(sph(0.14, 18), hairMat, 0, 0.145, -0.08);
-hairCrown.scale.set(1.15, 0.55, 0.9);
-head.add(hairCrown);
-// Occipital fill further back
-const hairBack = mesh(sph(0.17, 18), hairMat, 0, 0.0, -0.16);
-hairBack.scale.set(1.0, 0.8, 0.7);
+// hairCrown removed — was poking through brim rear (top was ~y=0.222)
+// Occipital fill further back — keep low (y≤0), top ~0.107 under brim
+const hairBack = mesh(sph(0.17, 18), hairMat, 0, -0.02, -0.16);
+hairBack.scale.set(1.0, 0.75, 0.7);
 head.add(hairBack);
 // Flat bangs on forehead ridge — high Y, very flat Y-scale; leave skin strip above eyes
 const bangC = mesh(sph(0.055, 12), hairMat, 0, 0.135, 0.15);
@@ -1673,9 +1670,9 @@ const smile = mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 14, Math.PI), mat(0x3
 smile.rotation.z = Math.PI;
 smile.renderOrder = 3;
 head.add(smile);
-// 草帽 — brim seated on the new hair bowl (not floating / not clipping eyes)
+// 草帽 — brim seated slightly lower (~0.14) to cover hair bowl top without covering eyes
 const hat = new THREE.Group();
-hat.position.set(0, 0.155, -0.025);
+hat.position.set(0, 0.14, -0.025);
 hat.rotation.z = 0.06;
 hat.add(mesh(cyl(0.32, 0.34, 0.022, 26), mat(0xf0deaa), 0, 0, 0));
 hat.add(mesh(cyl(0.15, 0.17, 0.13, 20), mat(0xf0deaa), 0, 0.07, 0));

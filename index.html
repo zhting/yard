@@ -1612,49 +1612,70 @@ const head = new THREE.Group();
 head.position.set(0, 1.34, 0);
 girl.add(head);
 head.add(mesh(sph(0.2, 24), skinMat, 0, 0, 0));
-const hairCap = mesh(sph(0.215, 24), hairMat, 0, 0.035, -0.02);
-hairCap.scale.set(1, 0.95, 1);
+// Cartoon hair remodel (HAIR=0x5b3a2e): solid toon meshes only — NO fluffify on any girl hair.
+// Bowl sits BACK and UP so front (+z) stays clearly behind the eyes (eyes ~z 0.16–0.18).
+const hairCap = mesh(sph(0.22, 24), hairMat, 0, 0.06, -0.12);
+hairCap.scale.set(1.05, 0.88, 0.85);
 head.add(hairCap);
-// hairCap fluff removed: shell meshes scaled outward and pierced face/hat brim (HAIR 0x5b3a2e)
+// Small crown bump under the hat — high Y, low Z reach
+const hairCrown = mesh(sph(0.14, 18), hairMat, 0, 0.145, -0.08);
+hairCrown.scale.set(1.15, 0.55, 0.9);
+head.add(hairCrown);
+// Occipital fill further back
+const hairBack = mesh(sph(0.17, 18), hairMat, 0, 0.0, -0.16);
+hairBack.scale.set(1.0, 0.8, 0.7);
+head.add(hairBack);
+// Flat bangs on forehead ridge — high Y, very flat Y-scale; leave skin strip above eyes
+const bangC = mesh(sph(0.055, 12), hairMat, 0, 0.135, 0.15);
+bangC.scale.set(1.2, 0.32, 0.38);
+head.add(bangC);
 for (const side of [-1, 1]) {
-  const fringe = mesh(sph(0.07, 12), hairMat, side * 0.105, 0.09, 0.14);
-  fringe.scale.set(0.7, 1.1, 0.7);
-  head.add(fringe);
-  head.add(mesh(new THREE.CapsuleGeometry(0.05, 0.16, 4, 10), hairMat, side * 0.185, -0.05, 0.02));
+  const bang = mesh(sph(0.048, 12), hairMat, side * 0.09, 0.125, 0.14);
+  bang.scale.set(0.9, 0.35, 0.36);
+  head.add(bang);
+  // Side locks beside cheeks, slightly back — not covering face center
+  const sideLock = mesh(new THREE.CapsuleGeometry(0.045, 0.14, 4, 10), hairMat, side * 0.2, -0.035, -0.015);
+  sideLock.rotation.z = side * 0.1;
+  head.add(sideLock);
 }
-// 双马尾
+// Twin tails: solid capsules/spheres + pink bow knots — no fluffify
 const tails = [];
 for (const side of [-1, 1]) {
   const tail = new THREE.Group();
-  tail.position.set(side * 0.2, 0.02, -0.06);
-  tail.add(mesh(sph(0.055, 12), mat(0xf78fb3), 0, 0.02, 0));
-  tail.add(mesh(sph(0.085, 14), hairMat, 0, -0.11, -0.01));
-  tail.add(mesh(sph(0.06, 12), hairMat, side * 0.015, -0.23, -0.02));
-  tail.add(mesh(sph(0.038, 10), hairMat, side * 0.02, -0.31, -0.02));
+  tail.position.set(side * 0.21, 0.02, -0.08);
+  tail.add(mesh(sph(0.048, 12), mat(0xf78fb3), 0, 0.02, 0)); // pink bow knot
+  const upper = mesh(new THREE.CapsuleGeometry(0.065, 0.048, 4, 12), hairMat, 0, -0.09, -0.01);
+  upper.rotation.x = 0.12;
+  tail.add(upper);
+  const mid = mesh(sph(0.058, 14), hairMat, side * 0.01, -0.2, -0.03);
+  mid.scale.set(1.0, 1.1, 1.0);
+  tail.add(mid);
+  const tip = mesh(sph(0.038, 12), hairMat, side * 0.015, -0.29, -0.045);
+  tip.scale.set(1.0, 1.05, 1.0);
+  tail.add(tip);
   head.add(tail);
   tails.push(tail);
 }
-tails.forEach(tl => fluffify(tl.children[1], { layers: 2, growth: 0.04, tint: 0.08 }));
-// 五官（renderOrder above hair so bangs/cap never win depth fights on close-ups）
+// 五官（renderOrder raised so face wins any residual depth fights on close-ups）
 for (const side of [-1, 1]) {
   const eye = mesh(sph(0.026, 12), mat(0x35241c), side * 0.072, 0.015, 0.175);
-  eye.renderOrder = 2;
+  eye.renderOrder = 3;
   head.add(eye);
   const highlight = mesh(sph(0.008, 8), mat(0xffffff), side * 0.064, 0.028, 0.196);
-  highlight.renderOrder = 2;
+  highlight.renderOrder = 3;
   head.add(highlight);
   const blush = mesh(sph(0.028, 10), mat(0xffb3ba), side * 0.125, -0.045, 0.145);
   blush.scale.set(1, 0.6, 0.5);
-  blush.renderOrder = 2;
+  blush.renderOrder = 3;
   head.add(blush);
 }
 const smile = mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 14, Math.PI), mat(0x35241c), 0, -0.028, 0.185);
 smile.rotation.z = Math.PI;
-smile.renderOrder = 2;
+smile.renderOrder = 3;
 head.add(smile);
-// 草帽
+// 草帽 — brim seated on the new hair bowl (not floating / not clipping eyes)
 const hat = new THREE.Group();
-hat.position.set(0, 0.155, -0.01);
+hat.position.set(0, 0.155, -0.025);
 hat.rotation.z = 0.06;
 hat.add(mesh(cyl(0.32, 0.34, 0.022, 26), mat(0xf0deaa), 0, 0, 0));
 hat.add(mesh(cyl(0.15, 0.17, 0.13, 20), mat(0xf0deaa), 0, 0.07, 0));

@@ -1615,7 +1615,7 @@ head.add(mesh(sph(0.2, 24), skinMat, 0, 0, 0));
 const hairCap = mesh(sph(0.215, 24), hairMat, 0, 0.035, -0.02);
 hairCap.scale.set(1, 0.95, 1);
 head.add(hairCap);
-fluffify(hairCap, { layers: 3, growth: 0.045, tint: 0.08 });
+// hairCap fluff removed: shell meshes scaled outward and pierced face/hat brim (HAIR 0x5b3a2e)
 for (const side of [-1, 1]) {
   const fringe = mesh(sph(0.07, 12), hairMat, side * 0.105, 0.09, 0.14);
   fringe.scale.set(0.7, 1.1, 0.7);
@@ -1634,17 +1634,23 @@ for (const side of [-1, 1]) {
   head.add(tail);
   tails.push(tail);
 }
-tails.forEach(tl => fluffify(tl.children[1], { layers: 3, growth: 0.06, tint: 0.1 }));
-// 五官
+tails.forEach(tl => fluffify(tl.children[1], { layers: 2, growth: 0.04, tint: 0.08 }));
+// 五官（renderOrder above hair so bangs/cap never win depth fights on close-ups）
 for (const side of [-1, 1]) {
-  head.add(mesh(sph(0.026, 12), mat(0x35241c), side * 0.072, 0.015, 0.175));
-  head.add(mesh(sph(0.008, 8), mat(0xffffff), side * 0.064, 0.028, 0.196));
+  const eye = mesh(sph(0.026, 12), mat(0x35241c), side * 0.072, 0.015, 0.175);
+  eye.renderOrder = 2;
+  head.add(eye);
+  const highlight = mesh(sph(0.008, 8), mat(0xffffff), side * 0.064, 0.028, 0.196);
+  highlight.renderOrder = 2;
+  head.add(highlight);
   const blush = mesh(sph(0.028, 10), mat(0xffb3ba), side * 0.125, -0.045, 0.145);
   blush.scale.set(1, 0.6, 0.5);
+  blush.renderOrder = 2;
   head.add(blush);
 }
 const smile = mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 14, Math.PI), mat(0x35241c), 0, -0.028, 0.185);
 smile.rotation.z = Math.PI;
+smile.renderOrder = 2;
 head.add(smile);
 // 草帽
 const hat = new THREE.Group();

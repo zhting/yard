@@ -221,10 +221,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
    基础：渲染器 / 场景 / 相机 / 控制器（微缩景观视角）
 ============================================================ */
 const app = document.getElementById('app');
-// 场景先画进 HDR 离屏缓冲（自带 MSAA），再由后期统一描线 / 反射 / 泛光 / 调色，
-// 所以默认帧缓冲不需要再开抗锯齿。
+// 画风：默认是原来的暖色柔和微缩风；网址加 ?style=anime 切到日系动画雨夜风
+// （墨线描边 + 积水倒影 + 泛光 + 靛蓝夜色，需要 WebGL2）
+const ANIME_STYLE = new URLSearchParams(location.search).get('style') === 'anime';
+// 动画风把场景先画进自带 MSAA 的 HDR 离屏缓冲再做后期，默认帧缓冲就不用再开抗锯齿
 // powerPreference: high-performance → 双显卡笔记本上让浏览器选独立显卡
-const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: !ANIME_STYLE, powerPreference: 'high-performance' });
 // 查一下浏览器实际用的是哪块 GPU：SwiftShader / llvmpipe / Basic Render 都是 CPU 软件模拟，
 // 说明硬件加速被关了或显卡被拉黑，画面会很卡 → 自动降到低画质并提示怎么打开
 const GPU_INFO = (() => {
@@ -240,8 +242,8 @@ const GPU_INFO = (() => {
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
-// 赛璐璐风：投影边缘要干脆，不要 PCFSoft 那种大片柔边
-renderer.shadowMap.type = THREE.PCFShadowMap;
+// 默认柔和投影；动画风要干脆的赛璐璐影子边
+renderer.shadowMap.type = ANIME_STYLE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.12;
@@ -379,9 +381,8 @@ const skyMat = new THREE.ShaderMaterial({
     uniform vec3 topColor; uniform vec3 bottomColor;
     void main() {
       float h = normalize(vPos).y;
-      // 俯视微缩景观时，画面里的天空大多在地平线以下，所以渐变区间要整体下移，
-      // 否则背景被钳成一整片纯色
-      gl_FragColor = vec4(mix(bottomColor, topColor, smoothstep(-0.55, 0.6, h)), 1.0);
+      // 动画风：俯视时画面里的天空大多在地平线以下，渐变区间整体下移，背景才有层次
+      gl_FragColor = vec4(mix(bottomColor, topColor, smoothstep(${ANIME_STYLE ? '-0.55, 0.6' : '-0.1, 0.7'}, h)), 1.0);
     }`
 });
 scene.add(new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), skyMat));
@@ -418,10 +419,10 @@ scene.add(new THREE.Points(starGeo, starMat));
 /* ============================================================
    材质工具
 ============================================================ */
-// 赛璐璐两阶色：受光面一整块亮色，背光面一整块暗色，明暗交界线干脆利落
+// 默认四阶柔和卡通明暗；动画风是赛璐璐两阶（受光面一块亮色、背光面一块暗色）
 // （three 的 toon 采样坐标是 dot(N,L)*0.5+0.5，前一半纹素 = 背光）
 function makeGradient() {
-  const c = new Uint8Array([72, 72, 72, 72, 255, 255, 255, 255]);
+  const c = ANIME_STYLE ? new Uint8Array([72, 72, 72, 72, 255, 255, 255, 255]) : new Uint8Array([100, 160, 215, 255]);
   const t = new THREE.DataTexture(c, c.length, 1, THREE.RedFormat);
   t.minFilter = t.magFilter = THREE.NearestFilter;
   t.needsUpdate = true;
@@ -558,8 +559,8 @@ function extrudeRounded(w, d, r, depth) {
 }
 
 const grassMat = mat(0x8ec963);
-const dirtMat = mat(0x8a5a3e);
-const rockMat = mat(0x7a6e66);
+const dirtMat = ANIME_STYLE ? mat(0x8a5a3e) : new THREE.MeshStandardMaterial({ color: 0x84573c, roughness: 0.95, metalness: 0 });
+const rockMat = ANIME_STYLE ? mat(0x7a6e66) : new THREE.MeshStandardMaterial({ color: 0x6f635a, roughness: 0.9, metalness: 0 });
 
 const diorama = new THREE.Group();
 scene.add(diorama);
@@ -609,9 +610,8 @@ for (let i = 0; i < 10; i++) {
   const pat = mesh(new THREE.CircleGeometry(0.5 + Math.random() * 0.6, 18), mat(lawnPatchCols[i % 3]), px, 0.028 + i * 0.0008, pz);
   pat.rotation.x = -Math.PI / 2;
   pat.castShadow = false;
-  // 色斑只是「画」在草坪上的颜色：不写深度，描线就不会给它们勾边（在草坪之后再画）
-  pat.material.depthWrite = false;
-  pat.renderOrder = 1;
+  // 动画风：色斑只是「画」在草坪上的颜色，不写深度，描线就不会给它们勾边（在草坪之后再画）
+  if (ANIME_STYLE) { pat.material.depthWrite = false; pat.renderOrder = 1; }
   diorama.add(pat);
 }
 
@@ -710,19 +710,19 @@ snowPoints.material.opacity = 0.95;
 snowPoints.material.sizeAttenuation = true;
 let snowLive = quality === 'low' ? (SNOW_N >> 1) : SNOW_N;
 
-// 动画雨夜那种细长、略斜的白色雨丝
-const RAIN_N = 1600;
+// 动画风是细长、略斜的白色雨丝；默认是短一些的淡蓝雨线
+const RAIN_N = ANIME_STYLE ? 1600 : 1000;
 let rainLive = quality === 'low' ? (RAIN_N >> 1) : RAIN_N;
 const rainLen = new Float32Array(RAIN_N);
 const rainSpd = new Float32Array(RAIN_N);
 const rainPos = new Float32Array(RAIN_N * 6);
 for (let i = 0; i < RAIN_N; i++) {
   const x = (Math.random() - 0.5) * 46;
-  const y = Math.random() * 14;
+  const y = Math.random() * (ANIME_STYLE ? 14 : 22);
   const z = (Math.random() - 0.5) * 40;
-  const len = 0.9 + Math.random() * 1.1;
+  const len = ANIME_STYLE ? 0.9 + Math.random() * 1.1 : 0.42 + Math.random() * 0.5;
   rainLen[i] = len;
-  rainSpd[i] = 19 + Math.random() * 12;
+  rainSpd[i] = (ANIME_STYLE ? 19 : 16) + Math.random() * 12;
   rainPos[i * 6]     = x;
   rainPos[i * 6 + 1] = y;
   rainPos[i * 6 + 2] = z;
@@ -733,7 +733,7 @@ for (let i = 0; i < RAIN_N; i++) {
 const rainGeo = new THREE.BufferGeometry();
 rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
 const rainMat = new THREE.LineBasicMaterial({
-  color: 0xe4efff, transparent: true, opacity: 0.3, depthWrite: false
+  color: ANIME_STYLE ? 0xe4efff : 0xc5e4ff, transparent: true, opacity: ANIME_STYLE ? 0.3 : 0.62, depthWrite: false
 });
 const rainLines = new THREE.LineSegments(rainGeo, rainMat);
 rainLines.visible = false;
@@ -1100,7 +1100,7 @@ const pathPts = [];   // 记录小径走向，供小兔子避让
 }
 
 // 石缝青苔
-const mossMat = mat(0x6fae53);
+const mossMat = ANIME_STYLE ? mat(0x6fae53) : new THREE.MeshStandardMaterial({ color: 0x6fae53, roughness: 1 });
 for (const pp of pathPts) {
   if (Math.random() < 0.35) continue;
   for (let k = 0; k < 2; k++) {
@@ -1260,7 +1260,7 @@ for (let i = 0; i < 10; i++) {
 /* ============================================================
    树（大树 + 秋千、樱花树）
 ============================================================ */
-const trunkMat = mat(0x9a6b45);
+const trunkMat = ANIME_STYLE ? mat(0x9a6b45) : new THREE.MeshStandardMaterial({ color: 0x9a6b45, roughness: 0.95 });
 const leafMats = { green: mat(0x6dbb60), dark: mat(0x5aa84f), pink: mat(0xf8b7cd), pink2: mat(0xfbcfdd) };
 const trees = [];
 
@@ -1522,8 +1522,9 @@ miniIsland(15, 1.2, 10, 3, 2.6, g => {
 const pond = new THREE.Group();
 pond.position.set(5, 0, 4);
 diorama.add(pond);
-// 水面用平涂色；倒影交给后期的屏幕空间反射（和雨天积水同一套）
-const waterMat = mat(0x4bb4d8, { transparent: true, opacity: 0.8 });
+// 默认是带环境反射的 PBR 水面；动画风用平涂色，倒影交给后期的屏幕空间反射
+const waterMat = ANIME_STYLE ? mat(0x4bb4d8, { transparent: true, opacity: 0.8 })
+  : new THREE.MeshStandardMaterial({ color: 0x5fc4dd, transparent: true, opacity: 0.78, roughness: 0.2, metalness: 0.1 });
 const water = mesh(cyl(2.1, 2.1, 0.16, 36), waterMat, 0, 0.08, 0);
 water.scale.z = 0.72;
 water.castShadow = false;
@@ -3481,21 +3482,31 @@ async function fetchWeather(city) {
 let envTarget = 0, env = 0;   // 0 白天 → 1 夜晚
 let timeAuto = true;
 envTarget = envFromHour(cityHourFrac(currentCity.tz));
-// 两套调色都按日系动画背景来：白天是通透的蓝天 + 暖白阳光、暗部偏冷蓝；
-// 夜晚不是黑，而是一整片深靛蓝，物体靠蓝色天光仍然看得清轮廓，灯光是唯一的暖色。
-const DAY = {
+// 默认：奶油暖色天空 + 暖阳，夜晚是深蓝夜空、整体压暗（原版小院）
+// 动画风：白天通透蓝天 + 暖白阳光、暗部偏冷蓝；夜晚是一整片深靛蓝，灯光是唯一的暖色
+const DAY = ANIME_STYLE ? {
   skyTop: new THREE.Color(0x4f93e6), skyBottom: new THREE.Color(0xd6eaff),
   hemiSky: new THREE.Color(0xdfeaff), hemiGround: new THREE.Color(0x9cbf86), hemiInt: 1.0,
   sunCol: new THREE.Color(0xfff1d8), sunInt: 2.1, sunPos: new THREE.Vector3(26, 34, 16),
   ambCol: new THREE.Color(0xd6e2ff), ambInt: 0.3,
+} : {
+  skyTop: new THREE.Color(0xffce9e), skyBottom: new THREE.Color(0xfff6e8),
+  hemiSky: new THREE.Color(0xfff0d8), hemiGround: new THREE.Color(0xa8c48a), hemiInt: 1.0,
+  sunCol: new THREE.Color(0xffe0b0), sunInt: 1.9, sunPos: new THREE.Vector3(26, 34, 16),
+  ambCol: new THREE.Color(0xffe8d0), ambInt: 0.32,
 };
-const NIGHT = {
+const NIGHT = ANIME_STYLE ? {
   skyTop: new THREE.Color(0x060d2a), skyBottom: new THREE.Color(0x14275c),
   hemiSky: new THREE.Color(0x5a78d0), hemiGround: new THREE.Color(0x1a2a5c), hemiInt: 0.95,
   sunCol: new THREE.Color(0xa8bcff), sunInt: 0.7, sunPos: new THREE.Vector3(-22, 30, -14),
   ambCol: new THREE.Color(0x30448e), ambInt: 0.34,
+} : {
+  skyTop: new THREE.Color(0x0e1440), skyBottom: new THREE.Color(0x2c3a68),
+  hemiSky: new THREE.Color(0x3a4a7d), hemiGround: new THREE.Color(0x1e2a3d), hemiInt: 0.38,
+  sunCol: new THREE.Color(0x8ea2d6), sunInt: 0.42, sunPos: new THREE.Vector3(-22, 30, -14),
+  ambCol: new THREE.Color(0x36406b), ambInt: 0.12,
 };
-// 阴天 / 雨天时天空向这组灰蓝靠拢
+// 动画风：阴天 / 雨天时天空向这组灰蓝靠拢（默认风格天空不随天气变）
 const OVERCAST = {
   dayTop: new THREE.Color(0x8296b4), dayBottom: new THREE.Color(0xc4cfdc),
   nightTop: new THREE.Color(0x0a1234), nightBottom: new THREE.Color(0x182a58),
@@ -4170,7 +4181,7 @@ renderer.domElement.addEventListener('pointercancel', endTouchPointer);
    WebGL1 设备没有可靠的半浮点 MSAA，直接退回原来的单遍渲染。
 ============================================================ */
 post = (() => {
-  if (!renderer.capabilities.isWebGL2) return null;
+  if (!ANIME_STYLE || !renderer.capabilities.isWebGL2) return null;
 
   const size = new THREE.Vector2();
   const fsCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -4465,7 +4476,7 @@ function animate() {
   tickAmbientAudio();
   const e = env;
   {
-    const ov = weatherMul.cloudGray * 0.85;
+    const ov = ANIME_STYLE ? weatherMul.cloudGray * 0.85 : 0;
     _skyA.copy(DAY.skyTop).lerp(OVERCAST.dayTop, ov);
     _skyB.copy(NIGHT.skyTop).lerp(OVERCAST.nightTop, ov);
     skyMat.uniforms.topColor.value.copy(_skyA).lerp(_skyB, e);
@@ -4484,9 +4495,9 @@ function animate() {
   sunDisc.material.opacity = 1 - e;
   moon.material.opacity = e;
   starMat.opacity = e;
-  // 夜里窗户要像便利店橱窗那样亮到发光（交给泛光）；人在屋里时收着点，免得窗玻璃挡住外景
-  glassMat.emissiveIntensity = 0.05 + e * (interiorMode ? 1.2 : 3.4);
-  for (const lm of lanternMats) lm.emissiveIntensity = e * 2.4;
+  // 动画风：夜里窗户要像便利店橱窗那样亮到发光（交给泛光）；人在屋里时收着点，免得窗玻璃挡住外景
+  glassMat.emissiveIntensity = 0.05 + e * (ANIME_STYLE ? (interiorMode ? 1.2 : 3.4) : 1.9);
+  for (const lm of lanternMats) lm.emissiveIntensity = e * (ANIME_STYLE ? 2.4 : 1.6);
   for (const g of streetGlowMats) {
     const v = g.base + g.night * e;
     if (g.mat) g.mat.emissiveIntensity = v;
@@ -4857,12 +4868,12 @@ function animate() {
     1 - weatherMul.cloudGray * 0.35,
     1 - weatherMul.cloudGray * 0.32,
     1 - weatherMul.cloudGray * 0.28
-  ).multiplyScalar(1 - env * 0.55);
+  ).multiplyScalar(ANIME_STYLE ? 1 - env * 0.55 : 1);
   stormCloudMat.color.setRGB(
     0.77 - weatherMul.cloudGray * 0.22,
     0.81 - weatherMul.cloudGray * 0.20,
     0.84 - weatherMul.cloudGray * 0.18
-  ).multiplyScalar(1 - env * 0.6);
+  ).multiplyScalar(ANIME_STYLE ? 1 - env * 0.6 : 1);
   grassMat.color.setHex(0x8ec963).lerp(new THREE.Color(0x5a8a48), weatherMul.wet * 0.55);
   innerGround.material.color.copy(innerBase).lerp(innerWet, weatherMul.wet);
   dirtMat.color.copy(dirtBase).lerp(dirtWet, weatherMul.wet);
@@ -4883,8 +4894,8 @@ function animate() {
       arr[i * 6 + 3] += 1.6 * delta;
       if (arr[i * 6 + 4] < 0) {
         const x = (Math.random() - 0.5) * 46;
-        // 雨丝只在院子上空 ~14 以下落：默认俯视机位在 y≈17，再高就会贴着镜头划出超长的线
-        const y = 10 + Math.random() * 4;
+        // 动画风的雨丝长，只在 ~14 以下落：默认俯视机位在 y≈17，再高就会贴着镜头划出超长的线
+        const y = ANIME_STYLE ? 10 + Math.random() * 4 : 16 + Math.random() * 10;
         const z = (Math.random() - 0.5) * 40;
         const len = rainLen[i];
         arr[i * 6]     = x;

@@ -99,6 +99,12 @@
     padding: 10px 18px; box-shadow: 0 8px 24px rgba(160,110,60,.16);
     opacity: 0; transition: opacity .28s ease, transform .28s ease;
   }
+  #dropHint {
+    position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center;
+    background: rgba(20, 30, 70, .45); color: #fff; font-size: 20px; letter-spacing: 4px;
+    border: 3px dashed rgba(255,255,255,.75); pointer-events: none;
+  }
+  #dropHint.show { display: flex; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
   #statusCard {
@@ -183,8 +189,12 @@
   <button id="btnDay">🌙 夜晚</button>
   <button id="btnRotate">🔄 自动旋转</button>
   <button id="btnPhoto" aria-label="今日拍照">📷 今日拍照</button>
+  <button id="btnChar" aria-label="换角色（选择 .vrm 模型）">👤 换角色</button>
+  <button id="btnCharReset" style="display:none" aria-label="恢复默认角色">↺ 默认角色</button>
+  <input id="charFile" type="file" accept=".vrm" hidden>
   <button id="btnExit" style="display:none">🚪 回到院子</button>
 </div>
+<div id="dropHint">松开鼠标，换成这个角色</div>
 <div id="loading"><div class="sun"></div><div>正在准备小院子…</div></div>
 <div id="vpad" aria-hidden="true"><div class="base"></div><div class="knob" id="vpadKnob"></div></div>
 <div id="lookZone">右半屏 · 环视</div>
@@ -2210,10 +2220,17 @@ function poseGirlRig(delta = 1 / 60) {
 ============================================================ */
 let girlVRM = null;
 let needSpringReset = false;   // 瞬移 / 换父节点后，弹簧骨骼回到静止状态
-const VRM_URLS = [
+// 默认角色：pixiv 官方开源样例（可再分发，随仓库提供）
+const VRM_DEFAULT_URLS = [
   'assets/girl.vrm',
   'https://raw.githubusercontent.com/pixiv/three-vrm/v3.5.5/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm',
 ];
+// 自己的角色（很多 VRM 的许可证禁止再分发，所以不进仓库）：
+//  1) 面板「换角色」或把 .vrm 拖进页面 → 存在本浏览器的 IndexedDB 里，下次自动加载
+//  2) 本地运行时放一个 assets/character.vrm（已写进 .gitignore）
+//  3) 网址参数 ?vrm=路径或网址
+const VRM_LOCAL_FILE = 'assets/character.vrm';
+const IS_LOCAL_RUN = location.protocol === 'file:' || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 const _vq = new THREE.Quaternion(), _ve = new THREE.Euler(), _vv = new THREE.Vector3(), _vv2 = new THREE.Vector3();
 // T 字姿势 → 手臂自然下垂（标准化骨骼的静止朝向与世界轴对齐）
 const VRM_ARM_DOWN_R = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2 - 0.12);
@@ -2221,22 +2238,119 @@ const VRM_ARM_DOWN_L = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3
 const VRM_FINGERS = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
 const VRM_FINGER_SEG = ['Proximal', 'Intermediate', 'Distal'];
 
-async function loadGirlVRM() {
-  let VRMmod, GLTFLoader;
-  try {
-    VRMmod = await import('@pixiv/three-vrm');
-    ({ GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js'));
-  } catch (_) { return; }
+/* ---------- 自定义角色存进 IndexedDB（只在这台电脑的这个浏览器里） ---------- */
+const charStore = {
+  open() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('yard-character', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  },
+  async run(mode, fn) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('files', mode);
+      const req = fn(tx.objectStore('files'));
+      tx.oncomplete = () => { db.close(); res(req && req.result); };
+      tx.onerror = () => { db.close(); rej(tx.error); };
+    });
+  },
+  get() { return this.run('readonly', st => st.get('vrm')).catch(() => null); },
+  set(rec) { return this.run('readwrite', st => st.put(rec, 'vrm')).catch(() => {}); },
+  clear() { return this.run('readwrite', st => st.delete('vrm')).catch(() => {}); },
+};
+
+let _vrmLib = null;
+async function vrmLib() {
+  if (_vrmLib) return _vrmLib;
+  const VRMmod = await import('@pixiv/three-vrm');
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
   const loader = new GLTFLoader();
   loader.register(parser => new VRMmod.VRMLoaderPlugin(parser));
-  let gltf = null;
-  for (const url of VRM_URLS) {
-    try { gltf = await loader.loadAsync(url); break; } catch (_) { /* 换下一个地址 */ }
+  _vrmLib = { VRMmod, loader };
+  return _vrmLib;
+}
+
+// 启动时：自定义角色（网址参数 → 浏览器里存的 → 本地文件）优先，否则默认角色
+async function loadGirlVRM() {
+  let lib;
+  try { lib = await vrmLib(); } catch (_) { return; }   // three-vrm 加载不了 → 留着手搓模型
+  const tryUrl = async url => { try { return await lib.loader.loadAsync(url); } catch (_) { return null; } };
+  const qv = new URLSearchParams(location.search).get('vrm');
+  let gltf = qv ? await tryUrl(qv) : null, custom = !!gltf;
+  if (!gltf) {
+    const rec = await charStore.get();
+    if (rec && rec.buf) {
+      try { gltf = await lib.loader.parseAsync(rec.buf, ''); custom = true; } catch (_) { await charStore.clear(); }
+    }
   }
-  const vrm = gltf && gltf.userData.vrm;
+  if (!gltf && IS_LOCAL_RUN && location.protocol !== 'file:') { gltf = await tryUrl(VRM_LOCAL_FILE); custom = !!gltf; }
+  for (const url of VRM_DEFAULT_URLS) {
+    if (gltf) break;
+    gltf = await tryUrl(url);
+  }
+  if (gltf) installGirlVRM(gltf, lib.VRMmod, custom);
+}
+
+// 运行中换角色（面板按钮 / 拖进页面）
+async function swapGirlVRM(file) {
+  if (!file) return;
+  if (!/\.vrm$/i.test(file.name)) { showToast('请选择 .vrm 格式的模型文件'); return; }
+  showToast('正在换角色…', 4000);
+  let lib, gltf, buf;
+  try {
+    lib = await vrmLib();
+    buf = await file.arrayBuffer();
+    gltf = await lib.loader.parseAsync(buf, '');
+  } catch (e) {
+    showToast('这个模型读不了：' + (e && e.message ? e.message.slice(0, 60) : '格式不对'), 4000);
+    return;
+  }
+  if (!gltf.userData.vrm) { showToast('这不是 VRM 模型（缺少 VRM 信息）', 3500); return; }
+  installGirlVRM(gltf, lib.VRMmod, true);
+  await charStore.set({ name: file.name, buf });
+}
+async function resetGirlVRM() {
+  await charStore.clear();
+  let lib;
+  try { lib = await vrmLib(); } catch (_) { return; }
+  for (const url of VRM_DEFAULT_URLS) {
+    try { installGirlVRM(await lib.loader.loadAsync(url), lib.VRMmod, false); return; } catch (_) {}
+  }
+}
+
+function vrmMetaSummary(vrm) {
+  const m = vrm.meta || {};
+  if (m.metaVersion === '0') {
+    return {
+      name: m.title || '', author: m.author || '',
+      noRedistribute: /Redistribution_Prohibited/i.test(m.licenseName || ''),
+      noCommercial: m.commercialUssageName === 'Disallow',
+    };
+  }
+  return {
+    name: m.name || '', author: (m.authors || []).join('、'),
+    noRedistribute: m.allowRedistribution === false,
+    noCommercial: m.commercialUsage === 'personalNonProfit',
+  };
+}
+
+function installGirlVRM(gltf, VRMmod, custom) {
+  const vrm = gltf.userData.vrm;
   if (!vrm) return;
+  // 换掉旧角色：伞先挪回手搓骨架，旧模型释放显存
+  if (girlVRM) {
+    shoulderR.userData.hand.add(umbrella);
+    girlVRM.vrm.scene.removeFromParent();
+    VRMmod.VRMUtils.deepDispose(girlVRM.vrm.scene);
+    girlVRM = null;
+  }
   VRMmod.VRMUtils.removeUnnecessaryVertices(gltf.scene);
   VRMmod.VRMUtils.rotateVRM0(vrm);   // VRM0.x 朝 -z，转成和 1.0 一样朝 +z
+  // VRM0 的标准化骨骼坐标系是转身之前的：绕 x / z 的旋转方向相反（three-vrm 官方动画示例同样处理）
+  const isVRM0 = vrm.meta?.metaVersion === '0';
   vrm.scene.traverse(o => {
     if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
   });
@@ -2256,6 +2370,8 @@ async function loadGirlVRM() {
       const b = H(side + f + seg);
       if (b) fingers[side].push({ b, thumb: f === 'Thumb', seg });
     }
+  const posed = [...Object.values(bones), ...fingers.left.map(f => f.b), ...fingers.right.map(f => f.b)].filter(Boolean);
+  const setRot = (b, x, y, z) => { if (b) b.rotation.set(x, y, z); };
 
   // 手搓模型的网格全部藏起来（骨骼组留着当驱动）；伞改挂到 VRM 的左手（女孩自己的左手，世界 +x 侧）
   const handBone = vrm.humanoid.getRawBoneNode('leftHand');
@@ -2269,8 +2385,10 @@ async function loadGirlVRM() {
   vrm.lookAt.target = camera;
   let lastParent = girl.parent, blinkAt = 2, blinkT = -1;
   const lastPos = girl.position.clone();
+  needSpringReset = true;
+  const meta = vrmMetaSummary(vrm);
   girlVRM = {
-    vrm,
+    vrm, custom, meta,
     // 伞柄握在掌心：手腕和中指根之间
     palmLocal() {
       handBone.getWorldPosition(_vv);
@@ -2290,13 +2408,13 @@ async function loadGirlVRM() {
       // 注：手搓模型的 shoulderL 在 -x 侧，是女孩的右手 → VRM right*
       _vq.setFromEuler(_ve.set(shoulderL.rotation.x, shoulderL.rotation.y, shoulderL.rotation.z - 0.06));
       bones.rightUpperArm.quaternion.copy(_vq).multiply(VRM_ARM_DOWN_R);
-      bones.rightLowerArm.rotation.set(0, -shoulderL.userData.elbow.rotation.x, 0);
+      setRot(bones.rightLowerArm, 0, -shoulderL.userData.elbow.rotation.x, 0);
       _vq.setFromEuler(_ve.set(shoulderR.rotation.x, shoulderR.rotation.y, shoulderR.rotation.z + 0.06));
       bones.leftUpperArm.quaternion.copy(_vq).multiply(VRM_ARM_DOWN_L);
-      bones.leftLowerArm.rotation.set(0, shoulderR.userData.elbow.rotation.x, 0);
+      setRot(bones.leftLowerArm, 0, shoulderR.userData.elbow.rotation.x, 0);
       // 撑伞那只手的手腕往里扣，握住伞柄
-      bones.leftHand.rotation.set(0, 0, umbrellaOpen * 0.5);
-      bones.rightHand.rotation.set(0, 0, 0);
+      setRot(bones.leftHand, 0, 0, umbrellaOpen * 0.5);
+      setRot(bones.rightHand, 0, 0, 0);
       // 手指：平时自然半握，撑伞的手握紧
       for (const [side, grip] of [['left', 0.25 + umbrellaOpen * 0.95], ['right', 0.25]]) {
         const sgn = side === 'left' ? -1 : 1;
@@ -2308,19 +2426,20 @@ async function loadGirlVRM() {
       // 腿：手搓 legL 在 -x 侧 → VRM right*；脚掌尽量保持水平
       for (const [leg, up, low, foot] of [[legL, 'rightUpperLeg', 'rightLowerLeg', 'rightFoot'], [legR, 'leftUpperLeg', 'leftLowerLeg', 'leftFoot']]) {
         const kx = leg.userData.knee.rotation.x;
-        bones[up].rotation.set(leg.rotation.x, 0, leg.rotation.z);
-        bones[low].rotation.set(kx, 0, 0);
-        bones[foot].rotation.set(THREE.MathUtils.clamp(-(leg.rotation.x + kx) * 0.6, -0.5, 0.6), 0, 0);
+        setRot(bones[up], leg.rotation.x, 0, leg.rotation.z);
+        setRot(bones[low], kx, 0, 0);
+        setRot(bones[foot], THREE.MathUtils.clamp(-(leg.rotation.x + kx) * 0.6, -0.5, 0.6), 0, 0);
       }
       // 躯干：走路时骨盆随步伐扭、上身反向扭回来，再加一点呼吸起伏
       const stride = legL.rotation.x - legR.rotation.x;
-      bones.hips.rotation.set(0, stride * 0.09, Math.sin(t * 2) * 0.004);
-      bones.spine.rotation.set(0.02 + Math.sin(t * 2) * 0.01, -stride * 0.07, 0);
-      bones.chest.rotation.set(Math.sin(t * 2 + 0.6) * 0.012, -stride * 0.04, 0);
+      setRot(bones.hips, 0, stride * 0.09, Math.sin(t * 2) * 0.004);
+      setRot(bones.spine, 0.02 + Math.sin(t * 2) * 0.01, -stride * 0.07, 0);
+      setRot(bones.chest, Math.sin(t * 2 + 0.6) * 0.012, -stride * 0.04, 0);
       // 头：驱动 head 组的角度拆给脖子和头
       const hr = head.rotation;
-      bones.neck.rotation.set(hr.x * 0.4, hr.y * 0.4, hr.z * 0.4);
-      bones.head.rotation.set(hr.x * 0.6, hr.y * 0.6, hr.z * 0.6);
+      setRot(bones.neck, hr.x * 0.4, hr.y * 0.4, hr.z * 0.4);
+      setRot(bones.head, hr.x * 0.6, hr.y * 0.6, hr.z * 0.6);
+      if (isVRM0) for (const b of posed) { const q = b.quaternion; q.set(-q.x, q.y, -q.z, q.w); }
       // 眨眼（每 2~5 秒一次）+ 被点到时笑
       const em = vrm.expressionManager;
       if (em) {
@@ -2340,6 +2459,14 @@ async function loadGirlVRM() {
       vrm.update(delta);
     },
   };
+  // 面板 / 提示
+  const btnReset = document.getElementById('btnCharReset');
+  if (btnReset) btnReset.style.display = custom ? '' : 'none';
+  if (custom) {
+    const who = [meta.name, meta.author && '作者 ' + meta.author].filter(Boolean).join(' · ');
+    const lic = meta.noRedistribute ? '（此模型禁止再分发：只存在你这台电脑的浏览器里，不会上传）' : '';
+    showToast('已换成 ' + (who || '自定义角色') + lic, 5000);
+  }
 }
 function poseGirlVRM(delta) { girlVRM.pose(delta); }
 
@@ -5050,6 +5177,7 @@ window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
 window.__yardTarget = (x, y, z) => { controls.minDistance = 0.3; controls.target.set(x, y, z); controls.update(); };   // 调试：改环绕中心（允许贴近看）
 window.__yardGirl = () => ({ girl, walk, iGirl, roomGroup, swingSeat, bench });
 window.__yardVRM = () => !!girlVRM;
+window.__yardVRMInfo = () => girlVRM && { custom: girlVRM.custom, meta: girlVRM.meta, v: girlVRM.vrm.meta?.metaVersion };
 window.__yardGPU = () => GPU_INFO;               // 调试：直接摆弄女孩状态
 window.__renderer = renderer;
 window.__yardClickDoor = () => {
@@ -5101,6 +5229,28 @@ window.__yardClickDoor = () => {
 }
 animate();
 loadGirlVRM();   // 异步加载 VRM 人物，加载好之前先用手搓模型
+{
+  const fileIn = document.getElementById('charFile');
+  document.getElementById('btnChar')?.addEventListener('click', e => { e.stopPropagation(); fileIn.click(); });
+  fileIn?.addEventListener('change', () => { swapGirlVRM(fileIn.files[0]); fileIn.value = ''; });
+  document.getElementById('btnCharReset')?.addEventListener('click', e => {
+    e.stopPropagation();
+    resetGirlVRM().then(() => showToast('已恢复默认角色'));
+  });
+  // 把 .vrm 文件拖进页面也能换
+  const dropHint = document.getElementById('dropHint');
+  let dragDepth = 0;
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; dropHint.classList.add('show'); });
+  addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+  addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; dropHint.classList.remove('show'); } });
+  addEventListener('drop', e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0; dropHint.classList.remove('show');
+    swapGirlVRM(e.dataTransfer.files[0]);
+  });
+}
 if (GPU_INFO.software) {
   setTimeout(() => showToast('浏览器没用上显卡，画面会卡：请在浏览器设置里打开「硬件加速」后重启', 8000), 1500);
 }

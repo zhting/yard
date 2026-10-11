@@ -193,7 +193,8 @@
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js"
   }
 }
 </script>
@@ -204,6 +205,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ============================================================
    基础：渲染器 / 场景 / 相机 / 控制器（微缩景观视角）
@@ -211,7 +213,20 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 const app = document.getElementById('app');
 // 场景先画进 HDR 离屏缓冲（自带 MSAA），再由后期统一描线 / 反射 / 泛光 / 调色，
 // 所以默认帧缓冲不需要再开抗锯齿。
-const renderer = new THREE.WebGLRenderer({ antialias: false });
+// powerPreference: high-performance → 双显卡笔记本上让浏览器选独立显卡
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+// 查一下浏览器实际用的是哪块 GPU：SwiftShader / llvmpipe / Basic Render 都是 CPU 软件模拟，
+// 说明硬件加速被关了或显卡被拉黑，画面会很卡 → 自动降到低画质并提示怎么打开
+const GPU_INFO = (() => {
+  let name = '';
+  try {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    name = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  } catch (_) {}
+  const software = /swiftshader|llvmpipe|softpipe|software|basic render|microsoft basic/i.test(name);
+  return { name, software };
+})();
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
@@ -256,6 +271,7 @@ function detectDefaultQuality() {
     const saved = localStorage.getItem(QUALITY_KEY);
     if (saved === 'low' || saved === 'high') return saved;
   } catch (_) {}
+  if (GPU_INFO.software) return 'low';
   let coarse = false, lowMem = false;
   try { coarse = matchMedia('(pointer: coarse)').matches; } catch (_) {}
   try { if (navigator.deviceMemory != null && navigator.deviceMemory <= 4) lowMem = true; } catch (_) {}
@@ -469,6 +485,42 @@ function mesh(geo, material, x = 0, y = 0, z = 0) {
 const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 const cyl = (rt, rb, h, s = 16) => new THREE.CylinderGeometry(rt, rb, h, s);
 const sph = (r, s = 20) => new THREE.SphereGeometry(r, s, Math.max(8, s * 0.6));
+
+/* ---------- 静态细节合批 ----------
+   细节一多，每个零件一个 Mesh 会让 draw call（外加阴影那一遍）翻倍。
+   Kit 把同一材质的零件烘焙好变换后合成一个网格：细节照加，draw call 只按材质数算。
+   只用于不会单独动的零件；会动的部分各自建一个 Kit 挂在自己的骨骼 / 组上。 */
+class Kit {
+  constructor() { this.parts = new Map(); }
+  add(geo, material, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, sx = 1, sy = sx, sz = sx) {
+    _kitM.compose(_kitP.set(x, y, z), _kitQ.setFromEuler(_kitE.set(rx, ry, rz)), _kitS.set(sx, sy, sz));
+    return this.addMatrix(geo, material, _kitM);
+  }
+  addMatrix(geo, material, matrix) {
+    const g = geo.index ? geo.toNonIndexed() : geo.clone();
+    g.applyMatrix4(matrix);
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!this.parts.has(material)) this.parts.set(material, []);
+    this.parts.get(material).push(g);
+    return this;
+  }
+  build(parent, { cast = true, receive = true } = {}) {
+    const out = [];
+    for (const [m, list] of this.parts) {
+      const me = new THREE.Mesh(mergeGeometries(list, false), m);
+      for (const g of list) g.dispose();
+      me.castShadow = cast; me.receiveShadow = receive;
+      parent.add(me);
+      out.push(me);
+    }
+    this.parts.clear();
+    return out;
+  }
+}
+const _kitM = new THREE.Matrix4(), _kitP = new THREE.Vector3(), _kitQ = new THREE.Quaternion();
+const _kitE = new THREE.Euler(), _kitS = new THREE.Vector3();
 
 /* ============================================================
    浮空小岛平台（圆角草皮 + 泥土层 + 岩石层）
@@ -841,6 +893,140 @@ const balloonMat = mat(0xe8615a);
   diorama.add(mbox);
 }
 
+/* ---------- 参考视频里的街角小物：自动贩卖机 / 路灯 / 自行车 / 邮筒 ---------- */
+const streetGlowMats = [];   // { mat, base, night }：夜里亮度 = base + night × env
+const tubeBetween = (a, b, r, seg = 6) => new THREE.TubeGeometry(new THREE.LineCurve3(new THREE.Vector3(...a), new THREE.Vector3(...b)), 1, r, seg);
+{
+  // 自动贩卖机：白色机身 + 发光的饮料展示窗 + 按钮条 + 取货口
+  const vm = new THREE.Group();
+  vm.position.set(-2.75, 0, -5.55);
+  vm.rotation.y = 0.55;
+  const shell = mat(0xf2f4f6), trim = mat(0x2a6fb8), dark = mat(0x22262c);
+  const drinksTex = (() => {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 320;
+    const x = c.getContext('2d');
+    x.fillStyle = '#c9d8e8'; x.fillRect(0, 0, 256, 320);
+    const cols = ['#e8473c', '#2f8fd8', '#f2b632', '#3db36b', '#f4f4f4', '#7a4bd1', '#ff8a3d', '#1c2b4a'];
+    for (let r = 0; r < 4; r++) {
+      x.fillStyle = '#d9e4ee'; x.fillRect(0, 70 + r * 78, 256, 6);
+      for (let i = 0; i < 7; i++) {
+        const cx = 20 + i * 36, base = 66 + r * 78;
+        x.fillStyle = cols[(r * 3 + i) % cols.length];
+        x.fillRect(cx - 10, base - 44, 20, 44);                    // 瓶身
+        x.fillRect(cx - 5, base - 54, 10, 10);                      // 瓶颈
+        x.fillStyle = 'rgba(255,255,255,.75)'; x.fillRect(cx - 10, base - 30, 20, 9);   // 标签
+        x.fillStyle = '#e8473c'; x.fillRect(cx - 9, base + 9, 18, 7);                   // 价格灯
+      }
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  })();
+  const glassM = new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: GRAD, map: drinksTex, emissive: 0xffffff, emissiveMap: drinksTex, emissiveIntensity: 0.6 });
+  streetGlowMats.push({ mat: glassM, base: 0.3, night: 0.75 });
+  const k = new Kit()
+    .add(box(0.82, 1.62, 0.62), shell, 0, 0.81, 0)
+    .add(box(0.84, 0.12, 0.64), trim, 0, 1.6, 0)                    // 顶部蓝色招牌条
+    .add(box(0.86, 0.05, 0.66), dark, 0, 0.025, 0)                  // 底座
+    .add(box(0.64, 0.12, 0.03), dark, 0, 0.2, 0.31)                 // 取货口
+    .add(box(0.7, 0.06, 0.02), trim, 0, 0.47, 0.315)                // 按钮条
+    .add(box(0.14, 0.2, 0.02), dark, 0.25, 0.68, 0.315);            // 投币区
+  for (let i = 0; i < 6; i++) k.add(box(0.05, 0.025, 0.01), mat(0xff6a5c), -0.3 + i * 0.075, 0.49, 0.326);
+  k.build(vm);
+  const front = mesh(new THREE.PlaneGeometry(0.66, 0.82), glassM, -0.02, 1.03, 0.312);
+  front.castShadow = false;
+  vm.add(front);
+  // 地上的一小片光
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(0.9, 24), new THREE.MeshBasicMaterial({
+    color: 0xd8eaff, map: smokeTex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  pool.rotation.x = -Math.PI / 2; pool.position.set(0, 0.03, 0.75); pool.scale.y = 0.75;
+  vm.add(pool);
+  streetGlowMats.push({ pool, base: 0, night: 0.55 });
+  diorama.add(vm);
+}
+{
+  // 路灯：灰色灯杆 + 弯臂 + 发光灯罩 + 地面光斑（大门右侧）
+  const lamp = new THREE.Group();
+  lamp.position.set(3.2, 0, 9.35);
+  const pole = mat(0x8b939c), dark = mat(0x4a5058);
+  const headM = new THREE.MeshToonMaterial({ color: 0xfff6dc, gradientMap: GRAD, emissive: 0xfff0c8, emissiveIntensity: 0 });
+  streetGlowMats.push({ mat: headM, base: 0.05, night: 3.2 });
+  new Kit()
+    .add(cyl(0.05, 0.075, 3.0, 10), pole, 0, 1.5, 0)
+    .add(cyl(0.11, 0.13, 0.22, 10), dark, 0, 0.11, 0)
+    .add(new THREE.TorusGeometry(0.32, 0.035, 6, 14, Math.PI / 2), pole, -0.32, 3.0, 0, 0, 0, 0)
+    .add(box(0.36, 0.05, 0.2), dark, -0.62, 3.3, 0)
+    .add(box(0.1, 0.38, 0.06), mat(0xf2d64b), 0, 1.4, 0.07)        // 黄色反光条
+    .build(lamp);
+  const lampHead = mesh(box(0.32, 0.05, 0.16), headM, -0.62, 3.26, 0);
+  lampHead.castShadow = false;
+  lamp.add(lampHead);
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(1.6, 28), new THREE.MeshBasicMaterial({
+    color: 0xfff0cf, map: smokeTex, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+  pool.rotation.x = -Math.PI / 2; pool.position.set(-0.62, 0.035, 0);
+  lamp.add(pool);
+  streetGlowMats.push({ pool, base: 0, night: 0.5 });
+  diorama.add(lamp);
+}
+{
+  // 自行车（停在左侧篱笆边，带前车筐）
+  const bike = new THREE.Group();
+  bike.position.set(-10.9, 0, 2.6);
+  bike.rotation.y = Math.PI / 2 + 0.06;
+  bike.rotation.z = 0.08;   // 靠着支架微微倾斜
+  const frame = mat(0x3fa7a0), tire = mat(0x24272b), chrome = mat(0xd5dadf), seat = mat(0x3a2b24);
+  const R = 0.3, wb = 0.98;
+  const k = new Kit();
+  for (const wx of [-wb / 2, wb / 2]) {
+    k.add(new THREE.TorusGeometry(R, 0.028, 8, 32), tire, wx, R, 0);
+    k.add(new THREE.TorusGeometry(R - 0.035, 0.008, 4, 28), chrome, wx, R, 0);
+    for (let i = 0; i < 12; i++) {                                    // 辐条
+      const a = (i / 12) * Math.PI * 2;
+      k.add(tubeBetween([wx, R, 0], [wx + Math.cos(a) * (R - 0.04), R + Math.sin(a) * (R - 0.04), 0], 0.0035, 3), chrome);
+    }
+    k.add(cyl(0.025, 0.025, 0.06, 8), chrome, wx, R, 0, Math.PI / 2);
+  }
+  const bb = [-0.02, 0.27, 0], st = [-0.16, 0.66, 0], ht = [0.36, 0.7, 0];   // 五通 / 座管顶 / 车头
+  k.add(tubeBetween(bb, st, 0.022), frame)
+   .add(tubeBetween(bb, ht, 0.024), frame)                            // 女式低跨下管
+   .add(tubeBetween([-wb / 2, R, 0], bb, 0.016), frame)
+   .add(tubeBetween([-wb / 2, R, 0], st, 0.015), frame)
+   .add(tubeBetween(ht, [wb / 2, R, 0], 0.02), chrome)               // 前叉
+   .add(tubeBetween(ht, [0.31, 0.92, 0], 0.018), chrome)             // 立管
+   .add(tubeBetween([0.28, 0.93, -0.24], [0.28, 0.93, 0.24], 0.014), chrome)   // 车把
+   .add(cyl(0.022, 0.022, 0.09, 8), tire, 0.28, 0.93, -0.22, Math.PI / 2)
+   .add(cyl(0.022, 0.022, 0.09, 8), tire, 0.28, 0.93, 0.22, Math.PI / 2)
+   .add(tubeBetween(st, [-0.2, 0.78, 0], 0.014), chrome)
+   .add(box(0.24, 0.05, 0.12), seat, -0.21, 0.81, 0)
+   .add(new THREE.TorusGeometry(0.075, 0.02, 6, 16), chrome, -0.02, 0.27, 0.04)   // 牙盘
+   .add(new THREE.TorusGeometry(R + 0.04, 0.012, 4, 20, Math.PI * 0.9), frame, -wb / 2, R, 0, 0, 0, Math.PI * 0.05)  // 后挡泥板
+   .add(new THREE.TorusGeometry(R + 0.04, 0.012, 4, 20, Math.PI * 0.75), frame, wb / 2, R, 0, 0, 0, Math.PI * 0.12);
+  // 前车筐：细铁丝框
+  const bx = 0.5, by = 0.88;
+  k.add(box(0.26, 0.012, 0.34), chrome, bx, by - 0.12, 0);
+  for (const [dx, dz] of [[-0.13, -0.17], [0.13, -0.17], [-0.13, 0.17], [0.13, 0.17]])
+    k.add(cyl(0.006, 0.006, 0.24, 4), chrome, bx + dx, by, dz);
+  for (const dy of [-0.04, 0.04, 0.12]) {
+    k.add(box(0.26, 0.008, 0.008), chrome, bx, by + dy, -0.17).add(box(0.26, 0.008, 0.008), chrome, bx, by + dy, 0.17)
+     .add(box(0.008, 0.008, 0.34), chrome, bx - 0.13, by + dy, 0).add(box(0.008, 0.008, 0.34), chrome, bx + 0.13, by + dy, 0);
+  }
+  k.add(tubeBetween([-0.05, 0.27, 0.05], [-0.12, 0.02, 0.2], 0.01), chrome);   // 脚撑
+  k.build(bike);
+  diorama.add(bike);
+}
+{
+  // 红色邮筒（日式圆顶）
+  const pb = new THREE.Group();
+  pb.position.set(4.25, 0, 9.45);
+  const red = mat(0xd83a32), dark = mat(0x2a2a2a);
+  new Kit()
+    .add(cyl(0.2, 0.2, 0.9, 20), red, 0, 0.55, 0)
+    .add(sph(0.2, 20), red, 0, 1.0, 0, 0, 0, 0, 1, 0.55, 1)
+    .add(cyl(0.16, 0.18, 0.1, 16), dark, 0, 0.05, 0)
+    .add(box(0.2, 0.035, 0.02), dark, 0, 0.82, 0.195)                 // 投信口
+    .add(box(0.16, 0.1, 0.012), mat(0xffffff), 0, 0.6, 0.2)          // 白色收件时刻牌
+    .build(pb);
+  diorama.add(pb);
+}
+
 /* ---------- 七彩小风车 ---------- */
 const pinwheels = [];
 function addPinwheel(x, z) {
@@ -1133,20 +1319,33 @@ for (let i = 0; i < 34; i++) {
 const swingPivot = new THREE.Group();
 swingPivot.position.set(5.6, 3.3, -2.9);
 const swingSeat = new THREE.Group();   // 悬挂的坐垫部分（小女孩荡秋千时会坐上来）
+const SWING_SEAT_Y = -2.9;               // 坐垫中心（秋千轴下方）
 {
   const branch = mesh(cyl(0.1, 0.14, 2.2, 8), trunkMat, 5.6, 3.35, -2.8);
   branch.rotation.x = Math.PI / 2;
   diorama.add(branch);
   const swing = swingSeat;
+  // 麻绳 + 绳结 + 双层木板坐垫；坐垫离地约 0.42，坐上去脚尖刚好点地
+  const rope = mat(0xe3d2a8), seatWood = mat(0xb98250);
+  const k = new Kit();
   for (const side of [-1, 1]) {
-    swing.add(mesh(cyl(0.025, 0.025, 2.1, 6), mat(0xe8d9b5), side * 0.55, -1.05, 0));
+    for (const dz of [-0.13, 0.13]) {                                     // 每侧两股绳，下端分叉夹住坐垫
+      const top = new THREE.Vector3(side * 0.5, 0, 0), bot = new THREE.Vector3(side * 0.5, SWING_SEAT_Y + 0.02, dz);
+      k.add(new THREE.TubeGeometry(new THREE.LineCurve3(top, bot), 1, 0.017, 6), rope);
+    }
+    k.add(sph(0.034, 8), rope, side * 0.5, -0.04, 0);                     // 树枝上的绳结
+    k.add(sph(0.03, 8), rope, side * 0.5, SWING_SEAT_Y + 0.42, 0.0, 0, 0, 0, 1, 1.3, 1);   // 分叉处的结
+    k.add(new THREE.TorusGeometry(0.12, 0.022, 6, 16), rope, side * 0.5, -0.02, 0, 0, Math.PI / 2, 0, 1, 0.5, 1);  // 绕枝绳圈
   }
-  swing.add(mesh(box(1.4, 0.09, 0.42), woodMat, 0, -2.1, 0));
+  k.add(box(1.24, 0.045, 0.36), seatWood, 0, SWING_SEAT_Y, 0);
+  k.add(box(1.16, 0.03, 0.3), woodMat, 0, SWING_SEAT_Y - 0.035, 0);
+  for (const side of [-1, 1]) k.add(box(0.05, 0.06, 0.38), woodDark, side * 0.5, SWING_SEAT_Y - 0.01, 0);
+  k.build(swing);
 
   // 坐在秋千上的小熊 🧸
   const bear = new THREE.Group();
   const bearFur = mat(0xc08a52);
-  const bearSeatY = -2.1;
+  const bearSeatY = SWING_SEAT_Y - 0.01;
   const bearBody = mesh(sph(0.15, 14), bearFur, 0, bearSeatY + 0.13, 0);
   bearBody.scale.set(1, 1.05, 0.9);
   bear.add(bearBody);
@@ -1168,6 +1367,7 @@ const swingSeat = new THREE.Group();   // 悬挂的坐垫部分（小女孩荡�
     leg.rotation.x = 1.2;
     bear.add(leg);
   }
+  bear.position.x = 0.3;   // 小熊坐右边，左边留给女孩
   swing.add(bear);
   swingPivot.add(swing);
   diorama.add(swingPivot);
@@ -1483,14 +1683,31 @@ const bench = new THREE.Group();
 bench.position.set(-4.6, 0, 3.4);
 bench.rotation.y = -0.7;
 diorama.add(bench);
+// 公园长椅：铸铁侧架 + 木条椅面 / 椅背。椅面高 0.33，正好是女孩（1.3 高）的小腿长度
+const BENCH_SEAT_Y = 0.33;
 {
-  const legMat = mat(0x7d5a3c);
-  for (const [x, z] of [[-0.95, -0.3], [0.95, -0.3], [-0.95, 0.3], [0.95, 0.3]])
-    bench.add(mesh(box(0.12, 0.5, 0.12), legMat, x, 0.25, z));
-  for (let i = 0; i < 4; i++)
-    bench.add(mesh(box(2.1, 0.07, 0.16), woodMat, 0, 0.52, -0.26 + i * 0.17));
-  for (let i = 0; i < 3; i++)
-    bench.add(mesh(box(2.1, 0.09, 0.05), woodMat, 0, 0.75 + i * 0.16, -0.38));
+  const iron = mat(0x34433f), slat = mat(0xb37b4b), slatDark = mat(0x9a6640);
+  const k = new Kit();
+  for (const sx of [-0.7, 0.7]) {
+    k.add(box(0.05, BENCH_SEAT_Y, 0.05), iron, sx, BENCH_SEAT_Y / 2, 0.17);                // 前腿
+    k.add(box(0.05, 0.86, 0.05), iron, sx, 0.42, -0.21, -0.16);                             // 后腿兼椅背立柱（后仰）
+    k.add(box(0.045, 0.045, 0.44), iron, sx, BENCH_SEAT_Y - 0.035, -0.02);                  // 座框
+    k.add(box(0.04, 0.04, 0.4), iron, sx, 0.07, -0.02);                                     // 脚撑
+    k.add(box(0.04, 0.22, 0.04), iron, sx, BENCH_SEAT_Y + 0.11, 0.19);                      // 扶手立柱
+    k.add(box(0.07, 0.035, 0.46), slatDark, sx, BENCH_SEAT_Y + 0.235, -0.01);               // 木扶手
+    k.add(new THREE.TorusGeometry(0.06, 0.012, 6, 12, Math.PI), iron, sx, BENCH_SEAT_Y + 0.14, 0.06, 0, Math.PI / 2, 0);  // 卷花
+    k.add(box(0.08, 0.02, 0.09), iron, sx, 0.01, 0.17);                                     // 地脚
+    k.add(box(0.08, 0.02, 0.09), iron, sx, 0.01, -0.12);
+  }
+  for (let i = 0; i < 5; i++)                                                               // 椅面 5 根木条
+    k.add(box(1.5, 0.032, 0.072), i % 2 ? slatDark : slat, 0, BENCH_SEAT_Y - 0.016, -0.17 + i * 0.087);
+  for (let i = 0; i < 3; i++) {                                                             // 椅背 3 根木条
+    const y = BENCH_SEAT_Y + 0.17 + i * 0.12;
+    k.add(box(1.5, 0.07, 0.028), i % 2 ? slatDark : slat, 0, y, -0.22 - (y - BENCH_SEAT_Y) * 0.16, -0.16);
+  }
+  k.add(box(1.44, 0.035, 0.035), iron, 0, BENCH_SEAT_Y - 0.06, 0.15);                        // 前后横撑
+  k.add(box(1.44, 0.035, 0.035), iron, 0, BENCH_SEAT_Y - 0.06, -0.18);
+  k.build(bench);
 }
 // 小猫（橘猫）
 const cat = new THREE.Group();
@@ -1581,123 +1798,304 @@ stringLights(new THREE.Vector3(5.6, 3.5, -4.6), new THREE.Vector3(11.2, 1.7, 3.5
 stringLights(new THREE.Vector3(-4.2, 2.9, -4.4), new THREE.Vector3(-8.5, 2.9, 2.2), 0.9);
 
 /* ============================================================
-   小女孩 ✨
+   小女孩 ✨（日系动画写实比例：约 7 头身、长直发、膝 / 肘关节）
+   散步状态机只写 armL / armR / legL / legR / tails / dress / head 这些「驱动」节点
+   （沿用 Q 版时期的角度），每帧末尾 poseGirlRig() 再把它们映射到真实骨骼：
+   张臂角收窄、膝盖按大腿角度自动弯曲、手肘随动、长发分片跟着摆，雨天弯肘撑伞。
 ============================================================ */
-const SKIN = 0xffdcc0, HAIR = 0x5b3a2e, DRESS = 0xe8615a, BLOUSE = 0xfff6ea;
+const SKIN = 0xffd9c4, HAIR = 0x74402a, SKIRT = 0xc8453e, BLOUSE = 0xfbfaf6;
+const GIRL_SCALE_OUT = 0.8;   // 院子里：约 1.3 高，比屋门（1.55）矮一截
+const GIRL_SCALE_IN = 1.3;    // 屋里（roomGroup 自身缩放 0.5）：约 2.1 室内单位，与床椅比例相称
+const GIRL_HIP = 0.8;         // 局部：髋关节高度（腿长约占身高一半）
+const GIRL_SEAT_DROP = GIRL_HIP - 0.05;   // 坐下时：髋轴比椅面高出大腿半径，原点再往下这么多
 const girl = new THREE.Group();
 girl.position.set(2.2, 0, 1.7);
 girl.rotation.y = 0.7;
-girl.scale.setScalar(1.1);
+girl.scale.setScalar(GIRL_SCALE_OUT);
 diorama.add(girl);
+const girlS = () => (girl.parent === roomGroup ? GIRL_SCALE_IN : GIRL_SCALE_OUT);
 
-const skinMat = mat(SKIN), hairMat = mat(HAIR), dressMat = mat(DRESS), blouseMat = mat(BLOUSE);
+// 脸用更柔的两阶（暗面只压到 78%）：动画里脸上几乎不打明暗交界线，只有刘海 / 下巴的投影
+const GRAD_FACE = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([200, 200, 200, 200, 255, 255, 255, 255]), 8, 1, THREE.RedFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t;
+})();
+const faceSkinMat = new THREE.MeshToonMaterial({ color: SKIN, gradientMap: GRAD_FACE });
+const skinMat = mat(SKIN), hairMat = mat(HAIR), skirtMat = mat(SKIRT), blouseMat = mat(BLOUSE);
+const sockMat = mat(0xf7f5f0), shoeMat = mat(0x5a3626), soleMat = mat(0x2e2420), ribbonMat = mat(0xd6404a);
 
-// 腿（髋部为轴心，走路时摆动）+ 鞋
+// 渐细的圆柱段：沿 -y 从关节往下长（关节在原点）
+function limbGeo(rTop, rBot, len, seg = 12) {
+  const g = new THREE.CylinderGeometry(rTop, rBot, len, seg);
+  g.translate(0, -len / 2, 0);
+  return g;
+}
+
+/* ---------- 腿：髋 → 膝 → 脚（膝盖由 poseGirlRig 自动弯） ---------- */
 const legL = new THREE.Group(), legR = new THREE.Group();
-legL.position.set(-0.07, 0.46, 0);
-legR.position.set(0.07, 0.46, 0);
-for (const leg of [legL, legR]) {
-  leg.add(mesh(cyl(0.045, 0.05, 0.42, 10), skinMat, 0, -0.21, 0));
-  const shoe = mesh(sph(0.07, 12), mat(0xd94f4f), 0, -0.41, 0.025);
-  shoe.scale.set(1, 0.62, 1.35);
-  leg.add(shoe);
+const knees = [];
+for (const [leg, side] of [[legL, -1], [legR, 1]]) {
+  leg.position.set(side * 0.062, GIRL_HIP, 0);
+  new Kit()
+    .add(sph(0.058, 14), skinMat)                                   // 胯部圆接
+    .add(limbGeo(0.057, 0.043, 0.37), skinMat)                      // 大腿
+    .build(leg);
+  const knee = new THREE.Group();
+  knee.position.y = -0.37;
+  new Kit()
+    .add(sph(0.044, 12), skinMat, 0, 0, 0.004)                      // 膝盖
+    .add(limbGeo(0.042, 0.029, 0.33), skinMat)                      // 小腿
+    .add(sph(0.041, 12), skinMat, 0, -0.11, -0.008, 0, 0, 0, 1, 2.1, 1.05)   // 小腿肚
+    .add(limbGeo(0.036, 0.033, 0.13, 12), sockMat, 0, -0.215, 0)    // 白短袜 + 袜口
+    .add(new THREE.TorusGeometry(0.035, 0.006, 6, 14), sockMat, 0, -0.215, 0, Math.PI / 2)
+    // 乐福鞋：鞋面 + 鞋底 + 横带
+    .add(new THREE.CapsuleGeometry(0.036, 0.1, 4, 12), shoeMat, 0, -0.347, 0.035, Math.PI / 2, 0, 0, 1, 1, 0.72)
+    .add(box(0.078, 0.016, 0.2), soleMat, 0, -0.371, 0.035)
+    .add(box(0.07, 0.012, 0.022), soleMat, 0, -0.335, 0.07)
+    .build(knee);
+  leg.add(knee);
+  leg.userData.knee = knee;
+  knees.push(knee);
   girl.add(leg);
 }
-// 裙子 + 上衣 + 领子 + 裙摆
-const dress = mesh(cyl(0.155, 0.345, 0.56, 24), dressMat, 0, 0.78, 0);
+
+/* ---------- 百褶裙 + 衬衫 + 领结 ---------- */
+// 百褶：开口圆锥按角度做三角波起伏，越往下褶越深；凸棱会被描线勾出来
+const skirtGeo = (() => {
+  const g = new THREE.CylinderGeometry(0.112, 0.205, 0.33, 64, 4, true);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const a = Math.atan2(z, x), r = Math.hypot(x, z);
+    const tri = Math.abs(((a / (Math.PI * 2)) * 16 % 1 + 1) % 1 - 0.5) * 2;   // 0..1 三角波
+    const depth = (0.165 - y) / 0.33;                                        // 0 腰 → 1 下摆
+    const k = 1 + 0.07 * tri * depth;
+    p.setXYZ(i, x * k, y, z * k);
+  }
+  g.computeVertexNormals();
+  return g;
+})();
+const dress = mesh(skirtGeo, mat(SKIRT, { side: THREE.DoubleSide }), 0, 0.84, 0);
+dress.scale.z = 0.86;
 girl.add(dress);
-girl.add(mesh(cyl(0.13, 0.16, 0.2, 20), blouseMat, 0, 1.07, 0));
-girl.add(mesh(new THREE.TorusGeometry(0.135, 0.02, 8, 20), dressMat, 0, 1.16, 0));
-const hem = mesh(new THREE.TorusGeometry(0.34, 0.026, 8, 26), mat(0xffffff), 0, 0.51, 0);
-hem.rotation.x = Math.PI / 2;
-girl.add(hem);
-girl.add(mesh(box(0.09, 0.09, 0.02), mat(0xfff6ea), 0, 0.82, 0.28));
-
-// 手臂（肩点外移到裙子轮廓之外）
-const armL = new THREE.Group(), armR = new THREE.Group();
-armL.position.set(-0.225, 1.15, 0);
-armR.position.set(0.225, 1.15, 0);
-for (const arm of [armL, armR]) {
-  arm.add(mesh(sph(0.062, 12), dressMat, 0, -0.01, 0));   // 泡泡袖
-  arm.add(mesh(new THREE.CapsuleGeometry(0.045, 0.2, 4, 10), blouseMat, 0, -0.13, 0));
-  arm.add(mesh(sph(0.055, 12), skinMat, 0, -0.26, 0));
-  girl.add(arm);
+{
+  // 上身：车削出 胸-腰-肩 的轮廓，再压扁成椭圆截面
+  const torsoGeo = new THREE.LatheGeometry([
+    [0.0, 0.97], [0.098, 0.97], [0.104, 1.01], [0.097, 1.07], [0.108, 1.14], [0.124, 1.2],
+    [0.127, 1.25], [0.118, 1.3], [0.088, 1.335], [0.05, 1.355], [0.0, 1.36],
+  ].map(([r, y]) => new THREE.Vector2(r, y)), 24);
+  const k = new Kit()
+    .add(torsoGeo, blouseMat, 0, 0, 0, 0, 0, 0, 1, 1, 0.72)
+    .add(cyl(0.104, 0.108, 0.035, 24), skirtMat, 0, 1.0, 0)                 // 腰带
+    .add(sph(0.1, 16), skirtMat, 0, 0.88, 0, 0, 0, 0, 1.08, 0.75, 0.82)     // 裙内填充，坐下时不露空
+    .add(cyl(0.034, 0.038, 0.1, 12), skinMat, 0, 1.39, 0)                   // 脖子
+    .add(sph(0.012, 8), ribbonMat, 0, 1.325, 0.095);                        // 领结结扣
+  for (const side of [-1, 1]) {
+    k.add(box(0.07, 0.008, 0.05), blouseMat, side * 0.04, 1.345, 0.07, 0.5, side * 0.35, side * 0.25);   // 小翻领
+    k.add(new THREE.ConeGeometry(0.022, 0.05, 4).rotateZ(side * Math.PI / 2), ribbonMat, side * 0.026, 1.325, 0.092, 0, 0, 0, 1, 1, 0.4);
+    k.add(box(0.016, 0.06, 0.006), ribbonMat, side * 0.012, 1.29, 0.093, 0, 0, side * 0.25);
+  }
+  for (let i = 0; i < 3; i++) k.add(sph(0.006, 6), blouseMat, 0, 1.24 - i * 0.075, 0.09);   // 纽扣
+  k.build(girl);
 }
-armL.rotation.z = -0.28;   // 左臂向外张开（负角度）
-armR.rotation.z = 0.32;    // 右臂向外张开（正角度）
 
-// 头部
+/* ---------- 手臂：肩 → 肘 → 手（armL/armR 只是驱动节点） ---------- */
+const armL = new THREE.Object3D(), armR = new THREE.Object3D();
+armL.rotation.z = -0.28; armR.rotation.z = 0.32;
+const shoulders = [];
+for (const side of [-1, 1]) {
+  const sh = new THREE.Group();
+  sh.position.set(side * 0.148, 1.305, 0);
+  new Kit()
+    .add(sph(0.056, 14), blouseMat, 0, -0.01, 0, 0, 0, 0, 1, 1.05, 0.95)   // 泡泡短袖
+    .add(limbGeo(0.054, 0.047, 0.12), blouseMat, 0, -0.01, 0)
+    .add(new THREE.TorusGeometry(0.046, 0.007, 6, 16), blouseMat, 0, -0.13, 0, Math.PI / 2)
+    .add(limbGeo(0.034, 0.029, 0.25), skinMat)                            // 上臂
+    .build(sh);
+  const elbow = new THREE.Group();
+  elbow.position.y = -0.25;
+  const hand = new THREE.Group();
+  hand.position.y = -0.225;
+  new Kit()
+    .add(sph(0.03, 10), skinMat)
+    .add(limbGeo(0.029, 0.022, 0.22), skinMat)                            // 小臂
+    .add(sph(0.03, 12), skinMat, 0, -0.255, 0.004, 0, 0, 0, 0.72, 1.35, 0.5)   // 手掌
+    .add(new THREE.CapsuleGeometry(0.009, 0.03, 3, 6), skinMat, -side * 0.018, -0.245, 0.016, 0.5, 0, -side * 0.5)  // 拇指
+    .build(elbow);
+  elbow.add(hand);
+  sh.add(elbow);
+  sh.userData.elbow = elbow;
+  sh.userData.hand = hand;
+  girl.add(sh);
+  shoulders.push(sh);
+}
+const [shoulderL, shoulderR] = shoulders;
+
+/* ---------- 头：尖下巴的脸 + 画上去的动画眼 ---------- */
 const head = new THREE.Group();
-head.position.set(0, 1.34, 0);
+head.position.set(0, 1.43, 0);
 girl.add(head);
-head.add(mesh(sph(0.2, 24), skinMat, 0, 0, 0));
-// Cartoon hair remodel (HAIR=0x5b3a2e): solid toon meshes only — NO fluffify on any girl hair.
-// Bowl sits BACK and LOW so top stays under hat brim (~y=0.13); front (+z) behind eyes.
-const hairCap = mesh(sph(0.22, 24), hairMat, 0, 0.025, -0.12);
-hairCap.scale.set(1.05, 0.50, 0.85);
-head.add(hairCap);
-// hairCrown removed — was poking through brim rear (top was ~y=0.222)
-// Occipital fill further back — keep low (y≤0), top ~0.107 under brim
-const hairBack = mesh(sph(0.17, 18), hairMat, 0, -0.02, -0.16);
-hairBack.scale.set(1.0, 0.75, 0.7);
-head.add(hairBack);
-// Flat bangs on forehead ridge — high Y, very flat Y-scale; leave skin strip above eyes
-const bangC = mesh(sph(0.055, 12), hairMat, 0, 0.135, 0.15);
-bangC.scale.set(1.2, 0.32, 0.38);
-head.add(bangC);
-for (const side of [-1, 1]) {
-  const bang = mesh(sph(0.048, 12), hairMat, side * 0.09, 0.125, 0.14);
-  bang.scale.set(0.9, 0.35, 0.36);
-  head.add(bang);
-  // Side locks beside cheeks, slightly back — not covering face center
-  const sideLock = mesh(new THREE.CapsuleGeometry(0.045, 0.14, 4, 10), hairMat, side * 0.2, -0.035, -0.015);
-  sideLock.rotation.z = side * 0.1;
-  head.add(sideLock);
+const HEAD_R = 0.1, HEAD_C = 0.1;   // 头球半径 / 球心在 head 组内的高度
+// 下半张脸往里收、下巴略尖（动画脸型）
+function shapeHead(g, r = HEAD_R) {
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const ny = y / r;
+    if (ny < 0.15) {
+      const t = Math.min(1, (0.15 - ny) / 1.15);
+      x *= 1 - 0.42 * Math.pow(t, 1.25);
+      z *= 1 - 0.12 * t;
+      if (z > 0) z += 0.1 * r * t * t;             // 下巴往前收出尖
+      y -= 0.04 * r * t * t;
+    }
+    p.setXYZ(i, x * 0.93, y * 1.04, z);
+  }
+  g.computeVertexNormals();
+  return g;
 }
-// Twin tails: solid capsules/spheres + pink bow knots — no fluffify
-const tails = [];
-for (const side of [-1, 1]) {
-  const tail = new THREE.Group();
-  tail.position.set(side * 0.21, 0.02, -0.08);
-  tail.add(mesh(sph(0.048, 12), mat(0xf78fb3), 0, 0.02, 0)); // pink bow knot
-  const upper = mesh(new THREE.CapsuleGeometry(0.065, 0.048, 4, 12), hairMat, 0, -0.09, -0.01);
-  upper.rotation.x = 0.12;
-  tail.add(upper);
-  const mid = mesh(sph(0.058, 14), hairMat, side * 0.01, -0.2, -0.03);
-  mid.scale.set(1.0, 1.1, 1.0);
-  tail.add(mid);
-  const tip = mesh(sph(0.038, 12), hairMat, side * 0.015, -0.29, -0.045);
-  tip.scale.set(1.0, 1.05, 1.0);
-  tail.add(tip);
-  head.add(tail);
-  tails.push(tail);
+new Kit()
+  .add(shapeHead(new THREE.SphereGeometry(HEAD_R, 32, 24)), faceSkinMat, 0, HEAD_C, 0)
+  .add(sph(0.022, 10), skinMat, -0.093, HEAD_C - 0.005, -0.008, 0, 0, 0, 0.45, 1, 0.8)   // 耳朵
+  .add(sph(0.022, 10), skinMat, 0.093, HEAD_C - 0.005, -0.008, 0, 0, 0, 0.45, 1, 0.8)
+  .build(head);
+// 五官贴图：画在一张和脸同曲面的薄壳上（比头球大 0.6%）
+const FACE_PHI = 1.5, FACE_TH0 = 0.95, FACE_THL = 1.45;   // 贴图纵向：0 = 额头，1 = 下巴
+const faceTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const x = c.getContext('2d');
+  const S = 2;   // 下面的坐标按 256 画布写
+  x.scale(S, S);
+  // 腮红
+  for (const cx of [62, 194]) {
+    const g = x.createRadialGradient(cx, 172, 2, cx, 172, 24);
+    g.addColorStop(0, 'rgba(255,130,140,.5)'); g.addColorStop(1, 'rgba(255,130,140,0)');
+    x.fillStyle = g; x.fillRect(cx - 26, 144, 52, 56);
+  }
+  const eye = (cx, flip) => {
+    const cy = 130;
+    x.save(); x.translate(cx, cy); x.scale(flip * 1.2, 1.15);
+    // 眼白（杏仁形）
+    x.fillStyle = '#fffaf6';
+    x.beginPath(); x.moveTo(-27, 4); x.quadraticCurveTo(-6, -24, 26, -12); x.quadraticCurveTo(22, 18, -2, 22); x.quadraticCurveTo(-20, 20, -27, 4); x.fill();
+    // 虹膜：竖长椭圆，上暗下亮
+    x.save();
+    x.beginPath(); x.moveTo(-27, 4); x.quadraticCurveTo(-6, -24, 26, -12); x.quadraticCurveTo(22, 18, -2, 22); x.quadraticCurveTo(-20, 20, -27, 4); x.clip();
+    const ig = x.createLinearGradient(0, -20, 0, 22);
+    ig.addColorStop(0, '#3a1a10'); ig.addColorStop(0.5, '#8a4424'); ig.addColorStop(1, '#e0a060');
+    x.fillStyle = ig; x.beginPath(); x.ellipse(2, 0, 15, 21, 0, 0, Math.PI * 2); x.fill();
+    x.strokeStyle = '#2a120a'; x.lineWidth = 1.6; x.stroke();
+    x.fillStyle = '#1c0b06'; x.beginPath(); x.ellipse(2, -1, 7, 10, 0, 0, Math.PI * 2); x.fill();
+    x.fillStyle = 'rgba(255,220,170,.55)'; x.beginPath(); x.ellipse(4, 12, 9, 5, 0, 0, Math.PI * 2); x.fill();
+    x.fillStyle = '#ffffff'; x.beginPath(); x.ellipse(-5, -8, 5.5, 6.5, -0.3, 0, Math.PI * 2); x.fill();
+    x.beginPath(); x.arc(9, 9, 2.6, 0, Math.PI * 2); x.fill();
+    x.restore();
+    // 上睫毛线：粗、外眼角上挑
+    x.strokeStyle = '#24120c'; x.lineCap = 'round'; x.lineWidth = 4.2;
+    x.beginPath(); x.moveTo(-28, 5); x.quadraticCurveTo(-8, -26, 27, -13); x.stroke();
+    x.lineWidth = 3; x.beginPath(); x.moveTo(24, -12); x.lineTo(32, -6); x.stroke();
+    x.lineWidth = 2.2; x.beginPath(); x.moveTo(20, -16); x.lineTo(29, -19); x.stroke();
+    // 下睫毛：细短
+    x.lineWidth = 1.4; x.strokeStyle = 'rgba(60,30,20,.75)';
+    x.beginPath(); x.moveTo(-6, 22); x.quadraticCurveTo(12, 20, 22, 12); x.stroke();
+    // 双眼皮线
+    x.lineWidth = 1.2; x.strokeStyle = 'rgba(80,40,30,.6)';
+    x.beginPath(); x.moveTo(-18, -14); x.quadraticCurveTo(0, -30, 24, -22); x.stroke();
+    x.restore();
+  };
+  eye(70, -1);
+  eye(186, 1);
+  // 眉毛
+  x.strokeStyle = '#6b3d27'; x.lineWidth = 2.6; x.lineCap = 'round';
+  x.beginPath(); x.moveTo(46, 88); x.quadraticCurveTo(70, 80, 94, 87); x.stroke();
+  x.beginPath(); x.moveTo(210, 88); x.quadraticCurveTo(186, 80, 162, 87); x.stroke();
+  // 鼻子（一笔小阴影）+ 嘴
+  x.strokeStyle = 'rgba(190,110,90,.8)'; x.lineWidth = 2;
+  x.beginPath(); x.moveTo(130, 176); x.lineTo(127, 184); x.stroke();
+  x.strokeStyle = '#b0524a'; x.lineWidth = 2.4;
+  x.beginPath(); x.moveTo(118, 210); x.quadraticCurveTo(128, 215, 139, 209); x.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+})();
+{
+  const fg = shapeHead(new THREE.SphereGeometry(HEAD_R * 1.006, 32, 20, Math.PI / 2 - FACE_PHI / 2, FACE_PHI, FACE_TH0, FACE_THL), HEAD_R * 1.006);
+  const face = new THREE.Mesh(fg, new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: GRAD_FACE, map: faceTex, transparent: true, depthWrite: false }));
+  face.receiveShadow = true;
+  face.position.y = HEAD_C;
+  face.renderOrder = 3;
+  head.add(face);
 }
-// 五官（renderOrder raised so face wins any residual depth fights on close-ups）
-for (const side of [-1, 1]) {
-  const eye = mesh(sph(0.026, 12), mat(0x35241c), side * 0.072, 0.015, 0.175);
-  eye.renderOrder = 3;
-  head.add(eye);
-  const highlight = mesh(sph(0.008, 8), mat(0xffffff), side * 0.064, 0.028, 0.196);
-  highlight.renderOrder = 3;
-  head.add(highlight);
-  const blush = mesh(sph(0.028, 10), mat(0xffb3ba), side * 0.125, -0.045, 0.145);
-  blush.scale.set(1, 0.6, 0.5);
-  blush.renderOrder = 3;
-  head.add(blush);
+
+/* ---------- 头发：头顶 / 后脑壳 + 刘海 + 鬓发 + 及腰长发（分左右两片随动） ---------- */
+// 一缕头发：扁平、上宽下尖，略带弧度（bendOut 往外翘，bendBack 往后披）
+function strandGeo(len, w, thick, bendOut = 0.02, bendBack = 0) {
+  const g = new THREE.CylinderGeometry(w, 0.003, len, 6, 6);
+  g.translate(0, -len / 2, 0);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const y = p.getY(i), t = -y / len;
+    p.setXYZ(i, p.getX(i), y, p.getZ(i) * (thick / w) + bendOut * t * t + bendBack * t);
+  }
+  g.computeVertexNormals();
+  return g;
 }
-const smile = mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 14, Math.PI), mat(0x35241c), 0, -0.028, 0.185);
-smile.rotation.z = Math.PI;
-smile.renderOrder = 3;
-head.add(smile);
-// 草帽 — brim seated slightly lower (~0.14) to cover hair bowl top without covering eyes
+{
+  const k = new Kit()
+    .add(shapeHead(new THREE.SphereGeometry(HEAD_R * 1.1, 32, 16, 0, Math.PI * 2, 0, 1.28), HEAD_R * 1.1), hairMat, 0, HEAD_C + 0.004, -0.004)
+    .add(shapeHead(new THREE.SphereGeometry(HEAD_R * 1.12, 32, 20, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0, 2.25), HEAD_R * 1.12), hairMat, 0, HEAD_C, -0.006);
+  // 刘海：额前一排尖尖的发束，长短交错，盖到眉毛
+  for (let i = 0; i < 9; i++) {
+    const a = (i - 4) * 0.2;
+    const len = 0.058 + ((i * 7) % 3) * 0.01 - Math.abs(i - 4) * 0.002;
+    k.add(strandGeo(len, 0.024, 0.008, 0.008), hairMat,
+      Math.sin(a) * HEAD_R * 0.7, HEAD_C + 0.08, Math.cos(a) * HEAD_R * 0.7, -0.42, a, (i - 4) * -0.05);
+  }
+  // 天使环：头顶一圈浅色高光（动画头发的标志）
+  k.add(new THREE.TorusGeometry(HEAD_R * 0.98, 0.006, 4, 40, Math.PI * 1.25), mat(0xb27450), 0, HEAD_C + 0.06, -0.002, Math.PI / 2 - 0.2, 0, Math.PI * 0.875);
+  // 鬓发：脸颊两侧垂到胸前
+  for (const side of [-1, 1]) {
+    for (const [dz, len, w] of [[0.04, 0.3, 0.026], [0.005, 0.34, 0.03]]) {
+      k.add(strandGeo(len, w, 0.012, 0.0, 0.01), hairMat, side * 0.088, HEAD_C + 0.05, dz, 0.04, side * Math.PI / 2, side * 0.08);
+    }
+  }
+  k.build(head);
+}
+// 及腰长发：后脑一圈宽发片，左右各一组以便分开飘动
+const tails = [new THREE.Object3D(), new THREE.Object3D()];   // 驱动（沿用旧马尾的角度）
+tails[0].rotation.z = 0.16; tails[1].rotation.z = -0.16;
+const hairSheets = [];
+for (const side of [-1, 1]) {
+  const sheet = new THREE.Group();
+  sheet.position.set(0, HEAD_C + 0.03, -0.02);
+  const k = new Kit();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI + side * (0.1 + i * 0.16);              // 后脑正中 → 耳后
+    const len = 0.62 - i * 0.04 + ((i * 5) % 3) * 0.02;
+    k.add(strandGeo(len, 0.05, 0.016, 0.0, 0.04 + i * 0.006), hairMat,
+      Math.sin(a) * HEAD_R * 1.02, 0, Math.cos(a) * HEAD_R * 1.02, 0.04, a, side * (0.02 + i * 0.025));
+  }
+  k.build(sheet);
+  head.add(sheet);
+  hairSheets.push(sheet);
+}
+
+/* ---------- 草帽（晴天白天戴，下雨 / 夜里 / 屋里收起） ---------- */
 const hat = new THREE.Group();
-hat.position.set(0, 0.14, -0.025);
-hat.rotation.z = 0.06;
-hat.add(mesh(cyl(0.32, 0.34, 0.022, 26), mat(0xf0deaa), 0, 0, 0));
-hat.add(mesh(cyl(0.15, 0.17, 0.13, 20), mat(0xf0deaa), 0, 0.07, 0));
-const ribbon = mesh(new THREE.TorusGeometry(0.165, 0.022, 8, 22), mat(0xf78fb3), 0, 0.035, 0);
-ribbon.rotation.x = Math.PI / 2;
-hat.add(ribbon);
+hat.position.set(0, HEAD_C + 0.085, -0.008);
+hat.rotation.set(-0.12, 0, 0.05);
+{
+  const straw = mat(0xf0deaa);
+  const brim = new THREE.LatheGeometry([[0.1, 0.012], [0.16, 0.004], [0.215, -0.012], [0.222, -0.02], [0.214, -0.022], [0.15, -0.008], [0.1, 0.0]]
+    .map(([r, y]) => new THREE.Vector2(r, y)), 36);
+  hat.add(mesh(brim, mat(0xf0deaa, { side: THREE.DoubleSide })));
+  hat.add(mesh(new THREE.LatheGeometry([[0.104, 0], [0.104, 0.05], [0.09, 0.08], [0.0, 0.088]].map(([r, y]) => new THREE.Vector2(r, y)), 28), straw));
+  hat.add(mesh(cyl(0.106, 0.106, 0.024, 28), ribbonMat, 0, 0.016, 0));
+  const bow = mesh(sph(0.02, 8), ribbonMat, 0.07, 0.02, 0.08);
+  bow.scale.set(1.4, 0.8, 0.6);
+  hat.add(bow);
+}
 head.add(hat);
 
 // 女孩可点击（挥手 + 蹦跳）
@@ -1705,28 +2103,245 @@ const girlMeshes = [];
 girl.traverse(o => { if (o.isMesh) girlMeshes.push(o); });
 let excitedUntil = 0;
 
-/* ---------- 小红伞（下雨天自动撑开） ---------- */
-// 挂在右手上：平时藏在身后scale≈0不可见，雨天右臂举起、伞面"砰"地撑开
+/* ---------- 透明塑料伞（下雨天自动撑开） ---------- */
+// 握在右手里；每帧把伞杆扶正成竖直（略往后仰盖住头顶），平时缩到看不见
 const umbrella = new THREE.Group();
 {
-  const pole = mesh(cyl(0.011, 0.011, 0.62, 8), mat(0x8a5a3c), 0, -0.57, 0);
-  umbrella.add(pole);
-  umbrella.add(mesh(cyl(0.007, 0.007, 0.08, 8), mat(0xd94f4f), 0, -0.71, 0));   // 伞顶尖
-  const canopy = mesh(new THREE.ConeGeometry(0.38, 0.2, 14), mat(0xe05a4e, { side: THREE.DoubleSide }), 0, -0.84, 0);
-  umbrella.add(canopy);
-  for (let i = 0; i < 14; i++) {   // 伞边缘的白色扇形描边
-    const a = (i / 14) * Math.PI * 2;
-    const rib = mesh(sph(0.016, 8), mat(0xfff6ea), Math.cos(a) * 0.372, -0.9, Math.sin(a) * 0.372);
-    rib.scale.set(1, 0.45, 1);
-    umbrella.add(rib);
+  const UR = 0.5, UH = 0.86, SEG = 8;
+  const steel = mat(0xd9dde3), white = mat(0xf7f9fb);
+  const dropMat = mat(0xffffff, { emissive: 0xbfd8ff, emissiveIntensity: 0.4 });
+  const k = new Kit()
+    .add(cyl(0.006, 0.006, UH + 0.05, 8), steel, 0, UH / 2, 0)                              // 伞杆
+    .add(new THREE.TorusGeometry(0.028, 0.009, 6, 14, Math.PI), white, -0.028, -0.01, 0, 0, 0, Math.PI)  // J 形手柄
+    .add(cyl(0.012, 0.012, 0.11, 10), white, 0, 0.03, 0)
+    .add(cyl(0.008, 0.004, 0.07, 6), steel, 0, UH + 0.19, 0)                                // 伞尖
+    .add(cyl(0.016, 0.016, 0.04, 8), steel, 0, UH - 0.24, 0);                               // 伞巢
+  // 伞面：八角穹顶（LatheGeometry 只给 8 段 → 天然就是八片伞布）
+  const prof = [];
+  for (let i = 0; i <= 8; i++) {
+    const t = i / 8;
+    prof.push(new THREE.Vector2(UR * Math.sin(t * Math.PI * 0.5), UH + 0.16 * Math.cos(t * Math.PI * 0.5) - 0.02 * t));
   }
-  umbrella.add(mesh(sph(0.02, 8), woodDark, 0, -0.885, 0));   // 伞柄弯头
+  // 伞骨 + 伞边白滚边 + 伞骨尖 + 伞面上的水珠
+  for (let i = 0; i < SEG; i++) {
+    const a0 = (i / SEG) * Math.PI * 2, a1 = ((i + 1) / SEG) * Math.PI * 2;
+    const pts = prof.map(v => new THREE.Vector3(Math.sin(a0) * v.x, v.y - 0.004, Math.cos(a0) * v.x));
+    k.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 10, 0.004, 4), white);
+    const e0 = new THREE.Vector3(Math.sin(a0) * UR, prof[8].y, Math.cos(a0) * UR);
+    const e1 = new THREE.Vector3(Math.sin(a1) * UR, prof[8].y, Math.cos(a1) * UR);
+    k.add(new THREE.TubeGeometry(new THREE.LineCurve3(e0, e1), 1, 0.006, 4), white);
+    k.add(sph(0.009, 6), white, e0.x, e0.y - 0.004, e0.z);
+    for (let j = 0; j < 2; j++) {
+      const t = 0.35 + 0.5 * ((i * 3 + j * 5) % 7) / 7, ang = a0 + (0.3 + 0.4 * j) * (a1 - a0);
+      const r = UR * Math.sin(t * Math.PI * 0.5) * 0.985, y = UH + 0.16 * Math.cos(t * Math.PI * 0.5) + 0.004;
+      k.add(sph(0.007 + 0.004 * j, 6), dropMat, Math.sin(ang) * r, y, Math.cos(ang) * r);
+    }
+  }
+  k.build(umbrella, { cast: false });
+  const canopyMat = new THREE.MeshToonMaterial({
+    color: 0xeef6ff, gradientMap: GRAD, transparent: true, opacity: 0.32, side: THREE.DoubleSide,
+  });
+  const canopy = new THREE.Mesh(new THREE.LatheGeometry(prof, SEG), canopyMat);
+  umbrella.add(canopy);
 }
-umbrella.position.set(0, -0.28, 0);   // 手心位置
 umbrella.scale.setScalar(0.001);
 umbrella.visible = false;
-armR.add(umbrella);
+shoulderR.userData.hand.add(umbrella);
 let umbrellaOpen = 0;
+
+/* ---------- 驱动 → 骨骼 ---------- */
+const _gq = new THREE.Quaternion(), _hq = new THREE.Quaternion(), _tilt = new THREE.Quaternion();
+const _tiltAxis = new THREE.Vector3(1, 0, 0);
+function poseGirlRig(delta = 1 / 60) {
+  // 手臂：Q 版时期张开 ±0.3 是为了躲开圆滚滚的裙子，写实身材收窄到贴身
+  const narrow = z => z - Math.sign(z) * Math.min(Math.abs(z), 0.22);
+  for (const [drv, sh] of [[armL, shoulderL], [armR, shoulderR]]) {
+    sh.rotation.set(drv.rotation.x, drv.rotation.y, narrow(drv.rotation.z));
+    // 手肘：自然微屈；手臂往前抬（坐着搭腿、抓秋千绳）时多弯一点
+    sh.userData.elbow.rotation.x = -0.16 - Math.min(0.7, Math.max(0, -drv.rotation.x) * 0.3);
+  }
+  // 撑伞：右上臂前抬、小臂竖起，手握在胸前
+  if (umbrellaOpen > 0.001) {
+    const k = Math.min(1, umbrellaOpen * 1.15);
+    const L = THREE.MathUtils.lerp;
+    shoulderR.rotation.x = L(shoulderR.rotation.x, -0.42, k);
+    shoulderR.rotation.y = L(shoulderR.rotation.y, 0, k);
+    shoulderR.rotation.z = L(shoulderR.rotation.z, 0.26, k);
+    shoulderR.userData.elbow.rotation.x = L(shoulderR.userData.elbow.rotation.x, -2.15, k);   // 小臂竖起，手在肩前
+    shoulderR.userData.elbow.rotation.y = L(0, -0.3, k);
+  } else {
+    shoulderR.userData.elbow.rotation.y = 0;
+  }
+  // 膝盖：大腿往前抬（坐 / 荡秋千）时小腿自然垂直；走路时后摆的腿屈膝抬脚跟
+  for (const leg of [legL, legR]) {
+    const lx = leg.rotation.x;
+    const w = THREE.MathUtils.smoothstep(-lx, 0.3, 0.9);
+    leg.userData.knee.rotation.x = (1 - w) * (Math.max(0, lx) * 1.15 + 0.05) + w * (-lx * 0.97);
+  }
+  // 长发跟着驱动摆（只取一部分幅度，且不往前甩进身体里）
+  for (let i = 0; i < 2; i++) {
+    const base = i === 0 ? 0.16 : -0.16;
+    hairSheets[i].rotation.z = (tails[i].rotation.z - base) * 0.45;
+    hairSheets[i].rotation.x = Math.max(-0.04, tails[i].rotation.x * 0.55);
+  }
+  // 草帽：晴天白天在院子里才戴（换成 VRM 人物后不戴）
+  hat.visible = !girlVRM && umbrellaOpen < 0.05 && env < 0.5 && girl.parent !== roomGroup;
+  if (girlVRM) poseGirlVRM(delta);
+  // 伞杆扶正：伞在手的局部 = 手世界朝向的逆 × 目标朝向（女孩朝向再往后仰一点）
+  if (umbrella.visible) {
+    girl.updateMatrixWorld(true);
+    girl.getWorldQuaternion(_gq);
+    _tilt.setFromAxisAngle(_tiltAxis, -0.2);
+    _gq.multiply(_tilt);
+    umbrella.parent.getWorldQuaternion(_hq);
+    umbrella.quaternion.copy(_hq.invert().multiply(_gq));
+    if (girlVRM) umbrella.position.copy(girlVRM.palmLocal());
+  }
+}
+
+/* ============================================================
+   VRM 人物：pixiv 官方开源样例模型（VRoid 制作，VRM Public License 1.0：
+   允许修改、再分发与商用，无需署名），长棕发 + 白上衣，与参考视频同款。
+   - 真实人形骨骼：上面 poseGirlRig 算出的肩 / 肘 / 髋 / 膝 / 头角度
+     逐帧写进 VRM 的标准化骨骼（normalized humanoid bones）
+   - 头发 / 衣摆：模型自带的弹簧骨骼（spring bone）物理，跟着走路、转身、荡秋千甩动
+   - 眨眼 / 开心表情、眼睛跟随镜头
+   加载失败（离线、双击 file:// 打开时浏览器不让读本地模型）就继续用上面的手搓模型。
+============================================================ */
+let girlVRM = null;
+let needSpringReset = false;   // 瞬移 / 换父节点后，弹簧骨骼回到静止状态
+const VRM_URLS = [
+  'assets/girl.vrm',
+  'https://raw.githubusercontent.com/pixiv/three-vrm/v3.5.5/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm',
+];
+const _vq = new THREE.Quaternion(), _ve = new THREE.Euler(), _vv = new THREE.Vector3(), _vv2 = new THREE.Vector3();
+// T 字姿势 → 手臂自然下垂（标准化骨骼的静止朝向与世界轴对齐）
+const VRM_ARM_DOWN_R = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2 - 0.12);
+const VRM_ARM_DOWN_L = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI / 2 + 0.12);
+const VRM_FINGERS = ['Thumb', 'Index', 'Middle', 'Ring', 'Little'];
+const VRM_FINGER_SEG = ['Proximal', 'Intermediate', 'Distal'];
+
+async function loadGirlVRM() {
+  let VRMmod, GLTFLoader;
+  try {
+    VRMmod = await import('@pixiv/three-vrm');
+    ({ GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js'));
+  } catch (_) { return; }
+  const loader = new GLTFLoader();
+  loader.register(parser => new VRMmod.VRMLoaderPlugin(parser));
+  let gltf = null;
+  for (const url of VRM_URLS) {
+    try { gltf = await loader.loadAsync(url); break; } catch (_) { /* 换下一个地址 */ }
+  }
+  const vrm = gltf && gltf.userData.vrm;
+  if (!vrm) return;
+  VRMmod.VRMUtils.removeUnnecessaryVertices(gltf.scene);
+  VRMmod.VRMUtils.rotateVRM0(vrm);   // VRM0.x 朝 -z，转成和 1.0 一样朝 +z
+  vrm.scene.traverse(o => {
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
+  });
+  const H = name => vrm.humanoid.getNormalizedBoneNode(name);
+  // 缩放：髋高对齐手搓模型的 GIRL_HIP，长椅 / 秋千 / 床椅的落座高度都不用改
+  vrm.scene.updateMatrixWorld(true);
+  const hipY = H('hips').getWorldPosition(_vv).y;
+  vrm.scene.scale.setScalar(GIRL_HIP / hipY);
+
+  const bones = {};
+  for (const n of ['hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
+    'leftUpperArm', 'leftLowerArm', 'leftHand', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+    'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'rightUpperLeg', 'rightLowerLeg', 'rightFoot']) bones[n] = H(n);
+  const fingers = { left: [], right: [] };
+  for (const side of ['left', 'right'])
+    for (const f of VRM_FINGERS) for (const seg of VRM_FINGER_SEG) {
+      const b = H(side + f + seg);
+      if (b) fingers[side].push({ b, thumb: f === 'Thumb', seg });
+    }
+
+  // 手搓模型的网格全部藏起来（骨骼组留着当驱动）；伞改挂到 VRM 的左手（女孩自己的左手，世界 +x 侧）
+  const handBone = vrm.humanoid.getRawBoneNode('leftHand');
+  const knuckle = vrm.humanoid.getRawBoneNode('leftMiddleProximal') || handBone;
+  handBone.add(umbrella);
+  for (const c of girl.children) c.traverse(o => { if (o.isMesh) o.visible = false; });
+  girl.add(vrm.scene);
+  girlMeshes.length = 0;
+  vrm.scene.traverse(o => { if (o.isMesh) girlMeshes.push(o); });
+
+  vrm.lookAt.target = camera;
+  let lastParent = girl.parent, blinkAt = 2, blinkT = -1;
+  const lastPos = girl.position.clone();
+  girlVRM = {
+    vrm,
+    // 伞柄握在掌心：手腕和中指根之间
+    palmLocal() {
+      handBone.getWorldPosition(_vv);
+      knuckle.getWorldPosition(_vv2);
+      _vv.lerp(_vv2, 0.7);
+      return handBone.worldToLocal(_vv);
+    },
+    pose(delta) {
+      const t = clock.elapsedTime;
+      // 换父节点（进屋 / 上秋千）或瞬移时，弹簧骨骼要重置，不然头发会被甩飞
+      if (girl.parent !== lastParent || girl.position.distanceToSquared(lastPos) > 0.25) {
+        lastParent = girl.parent;
+        needSpringReset = true;
+      }
+      lastPos.copy(girl.position);
+      // 手臂：沿用手搓骨骼的肩角度（在下垂姿势上再转），小臂按肘角绕自身轴弯
+      // 注：手搓模型的 shoulderL 在 -x 侧，是女孩的右手 → VRM right*
+      _vq.setFromEuler(_ve.set(shoulderL.rotation.x, shoulderL.rotation.y, shoulderL.rotation.z - 0.06));
+      bones.rightUpperArm.quaternion.copy(_vq).multiply(VRM_ARM_DOWN_R);
+      bones.rightLowerArm.rotation.set(0, -shoulderL.userData.elbow.rotation.x, 0);
+      _vq.setFromEuler(_ve.set(shoulderR.rotation.x, shoulderR.rotation.y, shoulderR.rotation.z + 0.06));
+      bones.leftUpperArm.quaternion.copy(_vq).multiply(VRM_ARM_DOWN_L);
+      bones.leftLowerArm.rotation.set(0, shoulderR.userData.elbow.rotation.x, 0);
+      // 撑伞那只手的手腕往里扣，握住伞柄
+      bones.leftHand.rotation.set(0, 0, umbrellaOpen * 0.5);
+      bones.rightHand.rotation.set(0, 0, 0);
+      // 手指：平时自然半握，撑伞的手握紧
+      for (const [side, grip] of [['left', 0.25 + umbrellaOpen * 0.95], ['right', 0.25]]) {
+        const sgn = side === 'left' ? -1 : 1;
+        for (const f of fingers[side]) {
+          if (f.thumb) f.b.rotation.set(0, sgn * grip * 0.6, 0);
+          else f.b.rotation.set(0, 0, sgn * grip * (f.seg === 'Proximal' ? 0.9 : 1.1));
+        }
+      }
+      // 腿：手搓 legL 在 -x 侧 → VRM right*；脚掌尽量保持水平
+      for (const [leg, up, low, foot] of [[legL, 'rightUpperLeg', 'rightLowerLeg', 'rightFoot'], [legR, 'leftUpperLeg', 'leftLowerLeg', 'leftFoot']]) {
+        const kx = leg.userData.knee.rotation.x;
+        bones[up].rotation.set(leg.rotation.x, 0, leg.rotation.z);
+        bones[low].rotation.set(kx, 0, 0);
+        bones[foot].rotation.set(THREE.MathUtils.clamp(-(leg.rotation.x + kx) * 0.6, -0.5, 0.6), 0, 0);
+      }
+      // 躯干：走路时骨盆随步伐扭、上身反向扭回来，再加一点呼吸起伏
+      const stride = legL.rotation.x - legR.rotation.x;
+      bones.hips.rotation.set(0, stride * 0.09, Math.sin(t * 2) * 0.004);
+      bones.spine.rotation.set(0.02 + Math.sin(t * 2) * 0.01, -stride * 0.07, 0);
+      bones.chest.rotation.set(Math.sin(t * 2 + 0.6) * 0.012, -stride * 0.04, 0);
+      // 头：驱动 head 组的角度拆给脖子和头
+      const hr = head.rotation;
+      bones.neck.rotation.set(hr.x * 0.4, hr.y * 0.4, hr.z * 0.4);
+      bones.head.rotation.set(hr.x * 0.6, hr.y * 0.6, hr.z * 0.6);
+      // 眨眼（每 2~5 秒一次）+ 被点到时笑
+      const em = vrm.expressionManager;
+      if (em) {
+        if (blinkT < 0 && t > blinkAt) blinkT = 0;
+        let blink = 0;
+        if (blinkT >= 0) {
+          blinkT += delta;
+          blink = Math.sin(Math.min(1, blinkT / 0.16) * Math.PI);
+          if (blinkT >= 0.16) { blinkT = -1; blinkAt = t + 2 + Math.random() * 3; }
+        }
+        const happy = t < excitedUntil ? 1 : 0;
+        em.setValue('happy', happy);
+        em.setValue('blink', happy ? 0 : blink);
+      }
+      girl.updateMatrixWorld(true);
+      if (needSpringReset) { vrm.humanoid.update(); vrm.springBoneManager?.reset(); needSpringReset = false; }
+      vrm.update(delta);
+    },
+  };
+}
+function poseGirlVRM(delta) { girlVRM.pose(delta); }
 
 /* ---------- 随机散步状态机 ---------- */
 // 障碍物（圆）：房子 / 池塘 / 大树 / 秋千 / 樱花树 / 长椅 / 野餐布 / 小猫 / 向日葵 / 菜地
@@ -1734,6 +2349,7 @@ const OBSTACLES = [
   [-6.2, -6.2, 3.4], [5, 4, 2.7], [5.6, -4.6, 0.7], [5.6, -2.9, 1.0],
   [-9.2, 6.4, 0.6], [10.2, 8.4, 0.5], [-4.6, 3.4, 1.4], [-6.4, 5.6, 1.4],
   [-3.5, 4.7, 0.6], [9.3, 5.8, 1.2], [9.2, -6.2, 1.8],
+  [-2.75, -5.55, 0.8], [3.2, 9.35, 0.4], [4.25, 9.45, 0.4], [-10.9, 2.6, 0.8],   // 贩卖机 / 路灯 / 邮筒 / 自行车
 ];
 const WALK_BOUNDS = { minX: -10, maxX: 10, minZ: -8.5, maxZ: 9 };
 const WALK_SPEED = 0.85;
@@ -1792,8 +2408,13 @@ const SPOTS = [
   { kind: 'pond',  ax: 5.0,  az: 7.2 },      // 池塘南沿
   { kind: 'house', ax: -8.06, az: -3.18 },   // 屋门口空地
 ];
-const BENCH_SIT = { x: -4.6, y: 0.045, z: 3.4, rotY: -0.7 };        // 椅面上、朝椅背外
-const SWING_SIT = { x: -0.52, y: -2.561, z: 0 };                    // 秋千踏板局部坐标（小熊旁边）
+// 坐在长椅右半边、屁股靠后：原点 = 椅面 - 髋高（坐下后小腿垂直落地）
+const BENCH_SIT = (() => {
+  bench.updateMatrixWorld(true);
+  const p = bench.localToWorld(new THREE.Vector3(0.28, 0, -0.07));
+  return { x: p.x, y: BENCH_SEAT_Y - GIRL_SEAT_DROP * GIRL_SCALE_OUT, z: p.z, rotY: bench.rotation.y };
+})();
+const SWING_SIT = { x: -0.28, y: SWING_SEAT_Y + 0.0225 - GIRL_SEAT_DROP * GIRL_SCALE_OUT, z: -0.04 };   // 秋千坐垫局部坐标（小熊旁边）
 const DOOR_POS = { x: -7.35, z: -4.33 };                            // 屋门位置（世界坐标）
 const DOOR_APPROACH = new THREE.Vector3(-8.06, 0, -3.18);           // 门口外的落点
 
@@ -2265,8 +2886,8 @@ const iGirl = { state: 'walk', path: [], act: null, until: 0, blend: 0, phase: 0
   fromPos: new THREE.Vector3(), fromRotY: 0, seatPos: new THREE.Vector3(), seatRotY: 0 };
 const ROOM_SPOTS = [
   { x: 0.4, z: 2.4, act: 'window', px: 0.4, py: 0, pz: 2.55, ry: 1.05 },            // 卧室窗前看前院
-  { x: -3.42, z: -1.25, act: 'chair', px: -3.42, py: -0.03, pz: -1.58, ry: Math.PI },  // 坐到书桌前
-  { x: 1.9, z: 0.5, act: 'bed', px: 1.9, py: 0, pz: 0.95, ry: Math.PI },            // 坐床沿
+  { x: -3.42, z: -1.25, act: 'chair', px: -3.42, py: 0.48 - GIRL_SEAT_DROP * GIRL_SCALE_IN, pz: -1.45, ry: Math.PI },  // 坐到书桌前（椅面 0.48）
+  { x: 1.9, z: 0.5, act: 'bed', px: 1.9, py: 0.61 - GIRL_SEAT_DROP * GIRL_SCALE_IN, pz: 1.3, ry: Math.PI },  // 坐床沿（被面 0.61）
   { x: 3.3, z: -1.3, act: 'counter', px: 3.3, py: 0, pz: -0.8, ry: Math.PI / 2 },   // 厨房台前忙活
   { x: -3.9, z: 2.85, act: 'shelf', px: -3.9, py: 0, pz: 2.9, ry: 0 },              // 书架前挑书
 ];
@@ -3739,6 +4360,11 @@ function animate() {
   // 夜里窗户要像便利店橱窗那样亮到发光（交给泛光）；人在屋里时收着点，免得窗玻璃挡住外景
   glassMat.emissiveIntensity = 0.05 + e * (interiorMode ? 1.2 : 3.4);
   for (const lm of lanternMats) lm.emissiveIntensity = e * 2.4;
+  for (const g of streetGlowMats) {
+    const v = g.base + g.night * e;
+    if (g.mat) g.mat.emissiveIntensity = v;
+    else { g.pool.material.opacity = v; g.pool.visible = v > 0.01; }
+  }
   for (const pl of lanternLights) pl.intensity = e * 1.5;
   for (const bb of bulbs) {
     const chase = Math.pow(Math.max(Math.sin((t * 0.7 - bb.idx / bulbs.length) * Math.PI * 2), 0), 5);
@@ -3770,12 +4396,14 @@ function animate() {
   }
 
   /* --- 小女孩：随机散步 --- */
+  const gs = girlS();   // 院子里 / 屋里两种缩放（屋子内部自身缩放了 0.5）
+  girl.scale.setScalar(gs);
   const holdUmb = umbrellaOpen > 0.05;   // 撑伞期间右臂姿态交给雨伞逻辑，状态机不再覆写
   const excited = t < excitedUntil;
   if (excited) {
     // 被点中：原地蹦跳 + 挥手
     girl.position.y = Math.abs(Math.sin(t * 9)) * 0.16;
-    girl.scale.y = 1.1;
+    girl.scale.y = gs;
     head.rotation.z = Math.sin(t * 1.3) * 0.05;
     head.rotation.y = Math.sin(t * 6) * 0.1;
     armL.rotation.z = -0.28;
@@ -3815,7 +4443,7 @@ function animate() {
       armL.rotation.z = -0.3;
       if (!holdUmb) armR.rotation.z = 0.3;
       girl.position.y = Math.abs(Math.sin(walk.phase)) * 0.035;
-      girl.scale.y = 1.1;
+      girl.scale.y = gs;
       head.rotation.z = Math.sin(walk.phase * 0.5) * 0.04;
       head.rotation.y = Math.sin(t * 0.6) * 0.1;
       head.rotation.x = 0.04;
@@ -3922,7 +4550,7 @@ function animate() {
     // 池塘边看鱼：背着手看小鸭和锦鲤，偶尔歪头
     girl.rotation.y = lerpAngle(girl.rotation.y, walk.heading, Math.min(1, delta * 5));
     girl.position.y = Math.abs(Math.sin(t * 2)) * 0.012;
-    girl.scale.y = 1.1;
+    girl.scale.y = gs;
     armL.rotation.x = 0.35; armL.rotation.z = -0.18;
     if (!holdUmb) { armR.rotation.x = 0.35; armR.rotation.z = 0.18; }
     head.rotation.z = Math.sin(t * 0.9) * 0.06;
@@ -3979,7 +4607,7 @@ function animate() {
   } else {
     // 原地休息：呼吸、左顾右盼
     girl.position.y = Math.abs(Math.sin(t * 2.2)) * 0.018;
-    girl.scale.y = 1.1 * (1 + Math.sin(t * 2) * 0.008);
+    girl.scale.y = gs * (1 + Math.sin(t * 2) * 0.008);
     head.rotation.z = Math.sin(t * 1.3) * 0.05;
     head.rotation.y = Math.sin(t * 0.6) * 0.14;
     head.rotation.x = 0;
@@ -4002,11 +4630,7 @@ function animate() {
   umbrellaOpen += ((weather.kind === 'rain' ? 1 : 0) - umbrellaOpen) * Math.min(1, delta * 3.2);
   umbrella.visible = umbrellaOpen > 0.04;
   umbrella.scale.setScalar(Math.max(0.001, umbrellaOpen));
-  if (umbrellaOpen > 0.05) {
-    const uk = Math.min(1, delta * 6) * umbrellaOpen;
-    armR.rotation.x += (-2.3 - armR.rotation.x) * uk;   // 举臂过头顶偏前（−x 旋转让手向 +z 上方抬）
-    armR.rotation.z += (0.15 - armR.rotation.z) * uk;
-  }
+  poseGirlRig(delta);   // 驱动 → 骨骼（膝 / 肘 / 长发 / 撑伞姿势 / 伞杆扶正 / VRM 人物）
 
   /* --- 小猫 / 秋千 / 树 / 晾衣 / 涟漪 --- */
   if (t < catExcitedUntil) {
@@ -4423,7 +5047,10 @@ window.__yardHurry = () => { walk.actUntil = Math.min(walk.actUntil || Infinity,
 window.__yardStay = sec => { if (walk.state === 'inside') walk.actUntil = Math.max(walk.actUntil, clock.elapsedTime + sec); };   // 调试：延长在屋时间
 window.__yardTeleport = (x, z) => { cancelActivity(); girl.position.set(x, 0, z); walk.state = 'idle'; walk.idleUntil = 1e9; };   // 调试：原地站定
 window.__yardStep = (n = 1) => { for (let i = 0; i < n; i++) animate(); };
-window.__yardTarget = (x, y, z) => { controls.target.set(x, y, z); controls.update(); };   // 调试：改环绕中心
+window.__yardTarget = (x, y, z) => { controls.minDistance = 0.3; controls.target.set(x, y, z); controls.update(); };   // 调试：改环绕中心（允许贴近看）
+window.__yardGirl = () => ({ girl, walk, iGirl, roomGroup, swingSeat, bench });
+window.__yardVRM = () => !!girlVRM;
+window.__yardGPU = () => GPU_INFO;               // 调试：直接摆弄女孩状态
 window.__renderer = renderer;
 window.__yardClickDoor = () => {
   camera.updateMatrixWorld(true);
@@ -4473,6 +5100,11 @@ window.__yardClickDoor = () => {
   }
 }
 animate();
+loadGirlVRM();   // 异步加载 VRM 人物，加载好之前先用手搓模型
+if (GPU_INFO.software) {
+  setTimeout(() => showToast('浏览器没用上显卡，画面会卡：请在浏览器设置里打开「硬件加速」后重启', 8000), 1500);
+}
+console.info('[小院] GPU:', GPU_INFO.name || '(unknown)', GPU_INFO.software ? '(软件渲染)' : '(硬件加速)');
 </script>
 </body>
 </html>

@@ -4,10 +4,23 @@
 
 ## 运行
 
-任选其一：
+推荐用一键启动脚本（会本地起服务，并用显卡加速打开 Chrome / Edge）：
 
-- 直接双击打开 `index.html`（需联网：Three.js 从 jsDelivr CDN 加载，天气走 Open-Meteo）
-- 或本地起服务：`python -m http.server 8080` 后访问 `http://localhost:8080`
+- **Windows**：双击 `start.bat`
+- **macOS / Linux**：终端里运行 `./start.sh`
+
+也可以手动：`python -m http.server 8080` 后访问 `http://localhost:8080`。
+直接双击 `index.html` 也能打开，但浏览器不让页面读取本地的人物模型文件，会改从 GitHub 下载（约 10MB）。
+需联网：Three.js / three-vrm 从 jsDelivr CDN 加载，天气走 Open-Meteo。
+
+### 显卡加速
+
+页面跑在浏览器的 WebGL 上，本身就是用本机 GPU 渲染的：
+
+- 渲染器以 `powerPreference: 'high-performance'` 创建，双显卡笔记本会优先用独立显卡
+- 启动脚本额外加了 `--ignore-gpu-blocklist --enable-gpu-rasterization --force_high_performance_gpu`，显卡被浏览器拉黑时也强制启用
+- 如果检测到浏览器在用 CPU 软件渲染（SwiftShader / llvmpipe 等），会自动降到「画质 低」并提示去浏览器设置里打开「硬件加速」
+- 控制台会打印实际使用的 GPU 型号；`__yardGPU()` 也能查看
 - 可选发布：把仓库推到 GitHub 后在仓库 Settings → Pages 选分支即可（静态单页，无构建）
 
 ## 玩法与操作
@@ -51,6 +64,18 @@ URL 加参数可强制天气，方便演示：
 
 控制台调试钩子：`__yard()` 查看状态、`__yardStep(n)` 手动推帧、`__yardGoto('swing')` 等触发指定活动。
 
+## 人物模型
+
+小女孩用的是 pixiv 官方开源的 VRoid 样例模型（`assets/girl.vrm`，即 three-vrm 仓库里的
+`VRM1_Constraint_Twist_Sample.vrm`）。许可证为 [VRM Public License 1.0](https://vrm.dev/licenses/1.0/)：
+允许修改、再分发和商用，无需署名。长棕发、白 T 恤、黑短裤，和参考视频里的女孩同款。
+
+- 用 [@pixiv/three-vrm](https://github.com/pixiv/three-vrm) 加载，带真实人形骨骼：散步、坐长椅、荡秋千、进屋这些动作逐帧驱动髋 / 膝 / 脚 / 肩 / 肘 / 手指 / 脖子 / 头
+- 头发和衣摆用模型自带的弹簧骨骼（spring bone）物理，走路、转身、荡秋千时会自然甩动；人物瞬移或进出屋时会重置物理，头发不会被甩飞
+- 会自己眨眼，被点到时笑；眼睛会跟着镜头
+- 雨天撑透明塑料伞（八根伞骨、白色滚边、伞面挂着水珠）
+- 模型加载失败（离线等）时，退回到程序生成的人物
+
 ## 画面风格
 
 日系动画（赛璐璐）渲染：两阶明暗、墨线描边、夜晚整体沉进深靛蓝、灯和窗会发光晕开，
@@ -68,4 +93,4 @@ WebGL1 设备会自动退回原来的单遍渲染。「画质 低」会关掉 MS
 
 ## 技术
 
-Three.js r160（jsDelivr CDN import map；需联网）+ 原生 WebGL 渲染，单文件、无构建；模型与可选环境音均为程序化生成，无外部贴图或音频素材。天气数据来自 [Open-Meteo](https://open-meteo.com/)（免费、无需密钥）。
+Three.js r160 + three-vrm 3.5.5（jsDelivr CDN import map；需联网）+ 原生 WebGL 渲染，无构建；除人物 VRM 模型外，场景模型与可选环境音均为程序化生成，无其他外部贴图或音频素材。天气数据来自 [Open-Meteo](https://open-meteo.com/)（免费、无需密钥）。
